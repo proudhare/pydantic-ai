@@ -16,11 +16,13 @@ import dataclasses
 import warnings
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, Generic, TypeVar, overload
 
 from ._warnings import PydanticAIDeprecationWarning
 from .messages import ModelResponse
 from .usage import RequestUsage, RunUsage
+
+_T = TypeVar('_T')
 
 
 class _DeprecatedCallableRunUsage(RunUsage):
@@ -150,25 +152,31 @@ def _wrap(value: Any, message: str) -> Any:
     raise TypeError(f'No deprecation wrapper registered for type {type(value).__name__!r}')  # pragma: no cover
 
 
-class _DeprecatedCallableProperty:
+class _DeprecatedCallableProperty(Generic[_T]):
     """Descriptor presenting a method-style accessor as a property.
 
     The accessor returns a wrapper that is `isinstance`-compatible with the
     underlying value type, but calling it emits `PydanticAIDeprecationWarning`.
     """
 
-    def __init__(self, fget: Callable[[Any], Any], message: str) -> None:
+    def __init__(self, fget: Callable[[Any], _T], message: str) -> None:
         self._fget = fget
         self._message = message
         self.__doc__ = fget.__doc__
 
-    def __get__(self, instance: Any, owner: type | None = None) -> Any:
+    @overload
+    def __get__(self, instance: None, owner: type | None = None) -> _DeprecatedCallableProperty[_T]: ...
+
+    @overload
+    def __get__(self, instance: object, owner: type | None = None) -> _T: ...
+
+    def __get__(self, instance: object | None, owner: type | None = None) -> _DeprecatedCallableProperty[_T] | _T:
         if instance is None:  # pragma: no cover
             return self
-        return _wrap(self._fget(instance), self._message)
+        return _wrap(self._fget(instance), self._message)  # type: ignore[return-value]
 
 
-def deprecated_callable_property(message: str) -> Callable[[Callable[[Any], Any]], _DeprecatedCallableProperty]:
+def deprecated_callable_property(message: str) -> Callable[[Callable[[Any], _T]], _DeprecatedCallableProperty[_T]]:
     """Decorator for staging a v2 method-to-property migration.
 
     Args:
@@ -179,7 +187,7 @@ def deprecated_callable_property(message: str) -> Callable[[Callable[[Any], Any]
     (or the method is removed entirely, depending on the card).
     """
 
-    def decorator(fget: Callable[[Any], Any]) -> _DeprecatedCallableProperty:
+    def decorator(fget: Callable[[Any], _T]) -> _DeprecatedCallableProperty[_T]:
         return _DeprecatedCallableProperty(fget, message)
 
     return decorator
