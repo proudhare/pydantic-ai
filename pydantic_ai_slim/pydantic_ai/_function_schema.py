@@ -344,14 +344,18 @@ def _validate_single_arg(
     *,
     name: str,
 ) -> dict[str, Any]:
-    try:
-        return {name: handler(value)}
-    except ValidationError:
-        # Fall back to unwrapping the `{name: value}` shape produced by a previous validation pass
-        # (e.g. after Temporal serialization/deserialization of already-validated args).
-        if isinstance(value, dict) and list(cast(dict[Any, Any], value)) == [name]:
+    # Check if the value is already in wrapped form `{name: ...}` and try unwrapping first.
+    # This prevents silent data loss when the model uses `extra='ignore'` (pydantic default):
+    # unwrapped validation against a wrapped payload would otherwise drop the wrapper key as
+    # an extra field, leaving all model fields to fall back to defaults.
+    if isinstance(value, dict) and list(cast(dict[Any, Any], value)) == [name]:
+        try:
             return {name: handler(value[name])}
-        raise
+        except ValidationError:
+            # Fall through to unwrapped attempt if wrapped form doesn't validate
+            pass
+    # Attempt unwrapped validation (for legitimately unwrapped payloads from LLMs)
+    return {name: handler(value)}
 
 
 def _extract_return_schema_type(return_annotation: Any, function: Callable[..., Any]) -> Any:

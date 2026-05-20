@@ -3865,6 +3865,34 @@ def test_single_base_model_arg_validator_accepts_wrapped_input():
     assert raw == wrapped == {'argument': Payload(city='Mexico City')}
 
 
+def test_single_base_model_arg_wrapped_with_default_extras():
+    """Wrapped payloads are correctly unwrapped even when the model uses extra='ignore' (default).
+
+    Regression test for issue #5550: wrapped input {param: {fields...}} must not be silently
+    dropped as an extra field, causing the tool to receive a defaulted model instead of the
+    actual payload.
+    """
+
+    class MyInput(BaseModel):
+        # Default pydantic behavior: extras are silently ignored
+        name: str = 'default_name'
+        value: int = 0
+
+    def my_tool(input: MyInput) -> str:  # pragma: no cover
+        return f'{input.name}={input.value}'
+
+    tool = Tool(my_tool)
+    validator = tool.function_schema.validator
+
+    # Wrapped input should be correctly unwrapped, not silently dropped
+    wrapped = validator.validate_python({'input': {'name': 'actual_name', 'value': 42}})
+    assert wrapped == {'input': MyInput(name='actual_name', value=42)}
+
+    # Unwrapped input should still work
+    unwrapped = validator.validate_python({'name': 'another_name', 'value': 99})
+    assert unwrapped == {'input': MyInput(name='another_name', value=99)}
+
+
 def test_tool_ctx_agent():
     """ctx.agent gives tools access to the running agent's properties."""
     agent = Agent('test', name='my_agent', output_type=int)
