@@ -2142,6 +2142,11 @@ class OpenAIResponsesModel(Model[AsyncOpenAI]):
             finish_reason = 'content_filter'
             provider_details.pop('finish_reason', None)
             provider_details['refusal'] = refusal_text
+        elif finish_reason == 'content_filter':
+            # OpenAI can emit content-policy refusals without ResponseOutputRefusal,
+            # using incomplete_details.reason='content_filter' alongside plain text.
+            # Clear items to maintain the invariant that content_filter => empty parts.
+            items = []
 
         return ModelResponse(
             parts=items,
