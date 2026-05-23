@@ -1013,6 +1013,43 @@ async def test_openrouter_settings_to_openai_settings_with_web_search() -> None:
     assert extra_body['web_search_options'] == {'search_context_size': 'high'}
 
 
+async def test_openrouter_thinking_false_maps_to_effort_none() -> None:
+    """Test that thinking=False maps to effort='none' in OpenRouter reasoning."""
+    settings = OpenRouterModelSettings()
+    model_request_parameters = ModelRequestParameters(thinking=False)
+
+    result = _openrouter_settings_to_openai_settings(settings, model_request_parameters)
+
+    extra_body = cast(dict[str, Any], result.get('extra_body', {}))
+    assert 'reasoning' in extra_body
+    assert extra_body['reasoning'] == {'effort': 'none'}
+
+
+async def test_openrouter_thinking_levels_map_correctly() -> None:
+    """Test that unified thinking levels map to OpenRouter effort values."""
+    test_cases = [
+        (True, 'medium'),
+        ('minimal', 'low'),
+        ('low', 'low'),
+        ('medium', 'medium'),
+        ('high', 'high'),
+        ('xhigh', 'high'),
+    ]
+
+    for thinking_value, expected_effort in test_cases:
+        settings = OpenRouterModelSettings()
+        model_request_parameters = ModelRequestParameters(thinking=thinking_value)
+
+        result = _openrouter_settings_to_openai_settings(settings, model_request_parameters)
+
+        extra_body = cast(dict[str, Any], result.get('extra_body', {}))
+        assert 'reasoning' in extra_body, f'reasoning not in extra_body for thinking={thinking_value}'
+        assert extra_body['reasoning']['effort'] == expected_effort, (
+            f'Expected effort={expected_effort} for thinking={thinking_value}, '
+            f'got {extra_body["reasoning"]["effort"]}'
+        )
+
+
 async def test_openrouter_prepare_request_loop_with_non_websearch_first(openrouter_api_key: str) -> None:
     """Test prepare_request loop continuation when first tool is not WebSearchTool."""
     from unittest.mock import Mock
