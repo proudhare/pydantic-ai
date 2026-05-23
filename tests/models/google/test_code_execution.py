@@ -35,7 +35,7 @@ from ...conftest import IsDatetime, IsNow, IsStr, try_import
 from ...parts_from_messages import part_types_from_messages
 
 with try_import() as imports_successful:
-    from pydantic_ai.models.google import GoogleModel
+    from pydantic_ai.models.google import GoogleModel, _native_tool_return_part_dict
     from pydantic_ai.providers.google import GoogleProvider
 
 with try_import() as anthropic_available:
@@ -465,3 +465,34 @@ async def test_receive_history_from_another_provider(
             [NativeToolCallPart, NativeToolReturnPart, NativeToolCallPart, NativeToolReturnPart, TextPart],
         ]
     )
+
+
+async def test_code_execution_list_content_message_replay():
+    """Test that list content for code execution tools is handled correctly in message replay."""
+    bash_result = [
+        {
+            'return_code': 0,
+            'stderr': '',
+            'stdout': 'hello\n',
+            'type': 'bash_code_execution_result',
+        }
+    ]
+
+    item = NativeToolReturnPart(
+        provider_name='google',
+        tool_name=CodeExecutionTool.kind,
+        content=bash_result,  # List content
+        tool_call_id='test_id',
+    )
+
+    # This should not raise UnexpectedModelBehavior
+    result = _native_tool_return_part_dict(
+        item,
+        frozenset({'google'}),
+        None,
+        supports_tool_combination=True,
+    )
+
+    assert result is not None
+    assert 'code_execution_result' in result
+    assert result['code_execution_result'] == bash_result
