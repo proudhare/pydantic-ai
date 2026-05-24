@@ -51,6 +51,10 @@ class CerebrasProvider(Provider[AsyncOpenAI]):
         # Reasoning models that support the cerebras_disable_reasoning setting
         reasoning_prefixes = ('zai', 'gpt-oss')
 
+        # Models that require thinking to be sent back as <think> tags in content
+        # (zai-glm and qwen models, per https://inference-docs.cerebras.ai/capabilities/reasoning)
+        tag_thinking_prefixes = ('zai', 'qwen')
+
         profile = None
         model_name_lower = model_name.lower()
         for prefix, profile_func in prefix_to_profile.items():
@@ -70,10 +74,12 @@ class CerebrasProvider(Provider[AsyncOpenAI]):
             'openai_service_tier',
         )
         is_reasoning = model_name_lower.startswith(reasoning_prefixes)
+        needs_tag_thinking = model_name_lower.startswith(tag_thinking_prefixes)
         return OpenAIModelProfile(
             json_schema_transformer=OpenAIJsonSchemaTransformer,
             openai_unsupported_model_settings=unsupported_model_settings,
             supports_thinking=is_reasoning,
+            openai_chat_send_back_thinking_parts='tags' if needs_tag_thinking else 'auto',
         ).update(profile)
 
     @overload

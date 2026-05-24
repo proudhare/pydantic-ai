@@ -30,7 +30,7 @@ LatestCerebrasModelNames = Literal[
     'llama3.1-8b',
     'qwen-3-235b-a22b-instruct-2507',
     'qwen-3-32b',
-    'zai-glm-4.6',
+    'zai-glm-4.7',
 ]
 
 CerebrasModelName = str | LatestCerebrasModelNames
@@ -52,9 +52,19 @@ class CerebrasModelSettings(ModelSettings, total=False):
     cerebras_disable_reasoning: bool
     """Disable reasoning for the model.
 
-    This setting is only supported on reasoning models: `zai-glm-4.6` and `gpt-oss-120b`.
+    This setting is only supported on reasoning models: `zai-glm-4.7` and `gpt-oss-120b`.
+    This parameter is deprecated by Cerebras in favor of `reasoning_effort="none"`.
 
     See [the Cerebras docs](https://inference-docs.cerebras.ai/resources/openai#passing-non-standard-parameters) for more details.
+    """
+
+    cerebras_clear_thinking: bool
+    """Control whether prior thinking is preserved across turns.
+
+    When set to False, prior thinking is retained in conversation history (recommended for multi-turn reasoning).
+    When set to True, thinking is cleared between turns.
+
+    See [the GLM-4.7 migration guide](https://inference-docs.cerebras.ai/resources/glm-47-migration) for more details.
     """
 
 
@@ -127,12 +137,20 @@ def _cerebras_settings_to_openai_settings(
     """
     extra_body = cast(dict[str, Any], model_settings.get('extra_body', {}))
 
+    # Handle cerebras_disable_reasoning (deprecated in favor of reasoning_effort)
     if (disable_reasoning := model_settings.pop('cerebras_disable_reasoning', None)) is not None:
-        extra_body['disable_reasoning'] = disable_reasoning
+        if disable_reasoning:
+            model_settings['openai_reasoning_effort'] = 'none'
+        else:
+            model_settings['openai_reasoning_effort'] = 'high'
     elif model_request_parameters.thinking is False:
-        extra_body['disable_reasoning'] = True
+        model_settings['openai_reasoning_effort'] = 'none'
     elif model_request_parameters.thinking:
-        extra_body['disable_reasoning'] = False
+        model_settings['openai_reasoning_effort'] = 'high'
+
+    # Handle cerebras_clear_thinking
+    if (clear_thinking := model_settings.pop('cerebras_clear_thinking', None)) is not None:
+        extra_body['clear_thinking'] = clear_thinking
 
     if extra_body:
         model_settings['extra_body'] = extra_body
