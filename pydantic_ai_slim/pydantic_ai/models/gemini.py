@@ -480,12 +480,21 @@ class GeminiStreamedResponse(StreamedResponse):
             gemini_part: _GeminiPartUnion
             for gemini_part in candidate['content']['parts']:
                 if 'text' in gemini_part:
-                    # Using vendor_part_id=None means we can produce multiple text parts if their deltas are sprinkled
-                    # amongst the tool call deltas
-                    for event in self._parts_manager.handle_text_delta(
-                        vendor_part_id=None, content=gemini_part['text']
-                    ):
-                        yield event
+                    # Check if this is a thinking part
+                    if gemini_part.get('thought'):
+                        # Using vendor_part_id=None means we can produce multiple thinking parts if their deltas are sprinkled
+                        # amongst other deltas
+                        for event in self._parts_manager.handle_thinking_delta(
+                            vendor_part_id=None, content=gemini_part['text']
+                        ):
+                            yield event
+                    else:
+                        # Using vendor_part_id=None means we can produce multiple text parts if their deltas are sprinkled
+                        # amongst the tool call deltas
+                        for event in self._parts_manager.handle_text_delta(
+                            vendor_part_id=None, content=gemini_part['text']
+                        ):
+                            yield event
 
                 elif 'function_call' in gemini_part:
                     # Here, we assume all function_call parts are complete and don't have deltas.
@@ -501,7 +510,7 @@ class GeminiStreamedResponse(StreamedResponse):
                     if maybe_event is not None:  # pragma: no branch
                         yield maybe_event
                 else:
-                    if not any([key in gemini_part for key in ['function_response', 'thought']]):
+                    if 'function_response' not in gemini_part:
                         raise AssertionError(f'Unexpected part: {gemini_part}')  # pragma: no cover
 
     async def _get_gemini_responses(self) -> AsyncIterator[_GeminiResponse]:
