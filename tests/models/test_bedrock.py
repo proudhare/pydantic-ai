@@ -4777,3 +4777,34 @@ async def test_bedrock_non_leading_system_prompt_wraps_as_user_message(bedrock_p
     ]
     assert '<system>Now be terse.</system>' in text_blocks
     assert 'You are helpful.' not in text_blocks
+
+
+@pytest.mark.parametrize(
+    'stop_reason,expected_finish_reason',
+    [
+        ('malformed_model_output', 'error'),
+        ('malformed_tool_use', 'error'),
+    ],
+)
+async def test_bedrock_finish_reason_malformed_stop_reason(
+    allow_model_requests: None,
+    bedrock_provider: BedrockProvider,
+    mocker: MockerFixture,
+    stop_reason: str,
+    expected_finish_reason: str,
+):
+    """Bedrock can return 'malformed_model_output' or 'malformed_tool_use' as stopReason."""
+    model = BedrockConverseModel('us.amazon.nova-micro-v1:0', provider=bedrock_provider)
+    agent = Agent(model=model, system_prompt='You are a helpful chatbot.')
+
+    mock_converse = mocker.patch.object(model.client, 'converse')
+    mock_converse.return_value = {
+        'output': {'message': {'role': 'assistant', 'content': [{'text': 'hello'}]}},
+        'stopReason': stop_reason,
+        'usage': {'inputTokens': 1, 'outputTokens': 1},
+        'ResponseMetadata': {'HTTPStatusCode': 200},
+    }
+
+    result = await agent.run('What is 2+2?')
+
+    assert result.response.finish_reason == expected_finish_reason
