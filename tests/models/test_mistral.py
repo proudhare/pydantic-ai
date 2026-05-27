@@ -2825,3 +2825,51 @@ async def test_stream_cancel(allow_model_requests: None):
             ),
         ]
     )
+
+
+async def test_usage_details_preserved(allow_model_requests: None):
+    """Test that extra usage fields beyond token counts are preserved in details."""
+    # Create a mock usage object with extra fields
+    # We'll use a dict to simulate the usage object with extra fields
+    from unittest.mock import Mock
+    
+    mock_usage = Mock()
+    mock_usage.prompt_tokens = 10
+    mock_usage.completion_tokens = 20
+    mock_usage.total_tokens = 30
+    # Simulate model_dump returning extra fields
+    mock_usage.model_dump.return_value = {
+        'prompt_tokens': 10,
+        'completion_tokens': 20,
+        'total_tokens': 30,
+        'cached_tokens': 5,  # Extra field that should be preserved
+        'queue_time': 100,    # Another extra field
+    }
+    
+    completion = MistralChatCompletionResponse(
+        id='123',
+        choices=[
+            MistralChatCompletionChoice(
+                finish_reason='stop',
+                index=0,
+                message=MistralAssistantMessage(content='Hello', role='assistant'),
+            )
+        ],
+        created=1704067200,
+        model='mistral-large-123',
+        object='chat.completion',
+        usage=mock_usage,
+    )
+    
+    mock_client = MockMistralAI.create_mock(completion)
+    model = MistralModel('mistral-large-latest', provider=MistralProvider(mistral_client=mock_client))
+    agent = Agent(model=model)
+    
+    result = await agent.run('Test message')
+    
+    assert result.usage.input_tokens == 10
+    assert result.usage.output_tokens == 20
+    # Verify that extra fields are preserved in details
+    assert result.usage.details is not None
+    assert result.usage.details.get('cached_tokens') == 5
+    assert result.usage.details.get('queue_time') == 100
