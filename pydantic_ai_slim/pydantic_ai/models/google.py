@@ -884,9 +884,9 @@ class GoogleModel(Model[Client]):
             else:
                 raise UserError('Google does not support setting ModelSettings.timeout to a httpx.Timeout')
 
+        cached_content = model_settings.get('google_cached_content')
         config = GenerateContentConfigDict(
             http_options=http_options,
-            system_instruction=system_instruction,
             temperature=model_settings.get('temperature'),
             top_p=model_settings.get('top_p'),
             top_k=model_settings.get('top_k'),
@@ -899,14 +899,18 @@ class GoogleModel(Model[Client]):
             thinking_config=self._translate_thinking(model_settings, model_request_parameters),
             labels=model_settings.get('google_labels'),
             media_resolution=model_settings.get('google_video_resolution'),
-            cached_content=model_settings.get('google_cached_content'),
-            tools=cast(ToolListUnionDict, tools),
-            tool_config=tool_config,
+            cached_content=cached_content,
             response_mime_type=response_mime_type,
             response_json_schema=response_schema,
             response_modalities=modalities,
             image_config=image_config,
         )
+        # Per Vertex API contract: system_instruction, tools, and tool_config must not be set
+        # when using cached_content (these are owned by the cache resource)
+        if not cached_content:
+            config['system_instruction'] = system_instruction
+            config['tools'] = cast(ToolListUnionDict, tools)
+            config['tool_config'] = tool_config
 
         if gla_service_tier is not None:
             config['service_tier'] = cast(_GoogleSDKServiceTier, gla_service_tier)

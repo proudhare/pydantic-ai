@@ -2539,6 +2539,44 @@ async def test_google_service_tier_not_in_config_when_unset(allow_model_requests
     assert 'service_tier' not in config_dict
 
 
+async def test_google_cached_content_excludes_conflicting_fields(allow_model_requests: None):
+    """When google_cached_content is set, system_instruction, tools, and tool_config must be absent."""
+    m = GoogleModel('gemini-3-flash-preview', provider=GoogleProvider(api_key='test-key'))
+    model_settings = GoogleModelSettings(google_cached_content='projects/123/locations/global/cachedContents/abc')
+
+    # Test with tools to ensure they're excluded
+    _, config = await m._build_content_and_config(  # pyright: ignore[reportPrivateUsage]
+        messages=[ModelRequest(parts=[UserPromptPart(content='Hello')]), ModelRequest(parts=[SystemPromptPart(content='You are helpful')])],
+        model_settings=model_settings,
+        model_request_parameters=ModelRequestParameters(function_tools=[NativeTool(name='test_tool', description='A test tool', parameters_json_schema={})]),
+    )
+
+    config_dict = cast(dict[str, Any], config)
+    assert config_dict['cached_content'] == 'projects/123/locations/global/cachedContents/abc'
+    # Per Vertex API contract, these must not be present when cached_content is set
+    assert 'system_instruction' not in config_dict
+    assert 'tools' not in config_dict
+    assert 'tool_config' not in config_dict
+
+
+async def test_google_without_cached_content_includes_all_fields(allow_model_requests: None):
+    """When google_cached_content is not set, system_instruction, tools, and tool_config should be present."""
+    m = GoogleModel('gemini-3-flash-preview', provider=GoogleProvider(api_key='test-key'))
+
+    _, config = await m._build_content_and_config(  # pyright: ignore[reportPrivateUsage]
+        messages=[ModelRequest(parts=[UserPromptPart(content='Hello')]), ModelRequest(parts=[SystemPromptPart(content='You are helpful')])],
+        model_settings={},
+        model_request_parameters=ModelRequestParameters(function_tools=[NativeTool(name='test_tool', description='A test tool', parameters_json_schema={})]),
+    )
+
+    config_dict = cast(dict[str, Any], config)
+    assert 'cached_content' not in config_dict or config_dict['cached_content'] is None
+    # These should be present when cached_content is not set
+    assert 'system_instruction' in config_dict
+    assert 'tools' in config_dict
+    assert 'tool_config' in config_dict
+
+
 @pytest.mark.parametrize(
     'tier,expected_header',
     [
