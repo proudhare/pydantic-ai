@@ -24,6 +24,7 @@ from pydantic_ai import (
     NativeToolReturnPart,
     RequestUsage,
     RetryPromptPart,
+    SystemPromptPart,
     TextContent,
     TextPart,
     ThinkingPart,
@@ -1507,6 +1508,29 @@ class TestInstructionParts:
         assert repr(part) == "InstructionPart(content='hello')"
         dynamic_part = InstructionPart(content='world', dynamic=True)
         assert repr(dynamic_part) == "InstructionPart(content='world', dynamic=True)"
+
+    def test_instruction_part_in_model_request_roundtrip(self):
+        """InstructionPart in ModelRequest.parts survives JSON serialization roundtrip."""
+        original = ModelRequest(
+            parts=[
+                SystemPromptPart(content='You are helpful.'),
+                InstructionPart(content='Be concise.', dynamic=False),
+                UserPromptPart(content='Hello'),
+            ]
+        )
+
+        serialized = ModelMessagesTypeAdapter.dump_json([original])
+        deserialized = ModelMessagesTypeAdapter.validate_json(serialized)
+
+        assert len(deserialized) == 1
+        msg = deserialized[0]
+        assert isinstance(msg, ModelRequest)
+        assert len(msg.parts) == 3
+        assert isinstance(msg.parts[0], SystemPromptPart)
+        assert isinstance(msg.parts[1], InstructionPart)
+        assert isinstance(msg.parts[2], UserPromptPart)
+        assert msg.parts[1].content == 'Be concise.'
+        assert msg.parts[1].dynamic is False
 
 
 def test_retry_prompt_strips_input_from_top_level_errors():

@@ -2023,6 +2023,7 @@ def _model_request_part_discriminator(v: Any) -> str | None:
 ModelRequestPart = Annotated[
     Annotated[SystemPromptPart, pydantic.Tag('system-prompt')]
     | Annotated[UserPromptPart, pydantic.Tag('user-prompt')]
+    | Annotated[InstructionPart, pydantic.Tag('instruction')]
     | Annotated[ToolSearchReturnPart, pydantic.Tag('tool-search-return')]
     | Annotated[ToolReturnPart, pydantic.Tag('tool-return')]
     | Annotated[RetryPromptPart, pydantic.Tag('retry-prompt')],
