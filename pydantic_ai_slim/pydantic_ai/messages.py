@@ -2066,6 +2066,7 @@ ModelResponsePart = Annotated[
     | Annotated[NativeToolCallPart, pydantic.Tag('builtin-tool-call')]
     | Annotated[NativeToolSearchReturnPart, pydantic.Tag('builtin-tool-search-return')]
     | Annotated[NativeToolReturnPart, pydantic.Tag('builtin-tool-return')]
+    | Annotated[ToolReturnPart, pydantic.Tag('tool-return')]
     | Annotated[ThinkingPart, pydantic.Tag('thinking')]
     | Annotated[CompactionPart, pydantic.Tag('compaction')]
     | Annotated[FilePart, pydantic.Tag('file')],

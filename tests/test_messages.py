@@ -1599,3 +1599,41 @@ def test_retry_prompt_tool_call_keeps_input_for_nested_errors():
     response = part.model_response()
     assert '"input": 42' in response
     assert '"name"' in response
+
+
+def test_tool_return_part_in_model_response_roundtrip():
+    """Test that ToolReturnPart in ModelResponse survives serialization roundtrip.
+    
+    Regression test for #5721 - ToolReturnPart with part_kind='tool-return' was missing
+    from the ModelResponsePart discriminated union, causing validation errors on deserialization.
+    """
+    from pydantic_ai.messages import ModelResponse, ToolReturnPart, ModelMessagesTypeAdapter
+    
+    msg = ModelResponse(
+        parts=[
+            ToolReturnPart(
+                tool_name='my_tool',
+                content={'result': 'success'},
+                tool_call_id='call-abc',
+                metadata={'custom': 'data'},
+                outcome='success',
+            )
+        ]
+    )
+    
+    # Serialize
+    serialized = ModelMessagesTypeAdapter.dump_python([msg], mode='python')
+    
+    # Deserialize - should not raise ValidationError
+    deserialized = ModelMessagesTypeAdapter.validate_python(serialized)
+    
+    # Verify the part is correctly deserialized
+    assert len(deserialized) == 1
+    assert isinstance(deserialized[0], ModelResponse)
+    assert len(deserialized[0].parts) == 1
+    tool_return = deserialized[0].parts[0]
+    assert isinstance(tool_return, ToolReturnPart)
+    assert tool_return.tool_name == 'my_tool'
+    assert tool_return.content == {'result': 'success'}
+    assert tool_return.tool_call_id == 'call-abc'
+    assert tool_return.outcome == 'success'
