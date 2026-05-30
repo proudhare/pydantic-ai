@@ -675,6 +675,41 @@ def test_model_messages_type_adapter_back_compat_missing_conversation_id():
     assert all(m.conversation_id is None for m in deserialized)
 
 
+def test_clean_message_history_preserves_conversation_id_and_metadata():
+    """_clean_message_history should preserve conversation_id, run_id, and metadata when merging ModelRequests."""
+    from pydantic_ai._agent_graph import _clean_message_history  # pyright: ignore[reportPrivateUsage]
+
+    msg1 = ModelRequest(
+        parts=[UserPromptPart(content='First')],
+        conversation_id='conv-abc',
+        run_id='run-123',
+        metadata={'key': 'value1'},
+    )
+    msg2 = ModelRequest(
+        parts=[UserPromptPart(content='Second')],
+        conversation_id='conv-abc',
+        run_id='run-123',
+        metadata={'key': 'value2'},
+    )
+
+    cleaned = _clean_message_history([msg1, msg2])
+
+    # Messages should be merged
+    assert len(cleaned) == 1
+    merged = cleaned[0]
+    assert isinstance(merged, ModelRequest)
+
+    # Fields from last_message should be preserved via replace()
+    assert merged.conversation_id == 'conv-abc'
+    assert merged.run_id == 'run-123'
+    assert merged.metadata == {'key': 'value2'}
+
+    # Parts should be merged
+    assert len(merged.parts) == 2
+    assert merged.parts[0].content == 'First'  # type: ignore[reportUnknownMemberType]
+    assert merged.parts[1].content == 'Second'  # type: ignore[reportUnknownMemberType]
+
+
 def test_model_messages_type_adapter_preserves_user_text_prompt_metadata():
     messages: list[ModelMessage] = [
         ModelRequest(
