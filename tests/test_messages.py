@@ -24,6 +24,7 @@ from pydantic_ai import (
     NativeToolReturnPart,
     RequestUsage,
     RetryPromptPart,
+    RunUsage,
     TextContent,
     TextPart,
     ThinkingPart,
@@ -1599,3 +1600,31 @@ def test_retry_prompt_tool_call_keeps_input_for_nested_errors():
     response = part.model_response()
     assert '"input": 42' in response
     assert '"name"' in response
+
+
+def test_run_usage_roundtrip():
+    """Test that RunUsage fields (requests, tool_calls) survive JSON serialization roundtrip."""
+    # Create a ModelResponse with RunUsage
+    original_usage = RunUsage(
+        requests=5,
+        tool_calls=3,
+        input_tokens=1000,
+        output_tokens=500,
+    )
+    response = ModelResponse(
+        parts=[TextPart(content='Hello!')],
+        usage=original_usage,
+        model_name='test',
+    )
+
+    # Round-trip through JSON
+    serialized = ModelMessagesTypeAdapter.dump_json([response])
+    deserialized = ModelMessagesTypeAdapter.validate_json(serialized)
+
+    # Verify RunUsage fields are preserved
+    deserialized_usage = deserialized[0].usage
+    assert isinstance(deserialized_usage, RunUsage)
+    assert deserialized_usage.requests == 5
+    assert deserialized_usage.tool_calls == 3
+    assert deserialized_usage.input_tokens == 1000
+    assert deserialized_usage.output_tokens == 500
