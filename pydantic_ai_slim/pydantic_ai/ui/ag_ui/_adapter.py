@@ -185,13 +185,13 @@ def _user_content_to_input(
             from ._multimodal import media_url_to_multimodal
 
             return media_url_to_multimodal(item)
-        return BinaryInputContent(type='binary', url=item.url, mime_type=item.media_type or '')
+        return BinaryInputContent(type='binary', url=item.url, mime_type=item.media_type or '', vendor_metadata=item.vendor_metadata)
     elif isinstance(item, BinaryContent):
         if use_multimodal:
             from ._multimodal import binary_to_multimodal
 
             return binary_to_multimodal(item)
-        return BinaryInputContent(type='binary', data=item.base64, mime_type=item.media_type)
+        return BinaryInputContent(type='binary', data=item.base64, mime_type=item.media_type, vendor_metadata=item.vendor_metadata)
     elif isinstance(item, UploadedFile):
         # UploadedFile holds an opaque provider file_id (e.g. 'file-abc123'), not a URL or
         # binary data, so it can't be mapped to AG-UI input content. Skipped like CachePoint.
@@ -319,9 +319,14 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                                 case TextInputContent(text=text):
                                     user_prompt_content.append(text)
                                 case BinaryInputContent():
+                                    # Extract vendor_metadata if present (ag-ui types may support extra fields)
+                                    vendor_metadata = getattr(part, 'vendor_metadata', None)
                                     if part.url:
                                         try:
                                             binary_part = BinaryContent.from_data_uri(part.url)
+                                            # Apply vendor_metadata to the parsed BinaryContent
+                                            if vendor_metadata is not None:
+                                                binary_part = type(binary_part)(data=binary_part.data, media_type=binary_part.media_type, vendor_metadata=vendor_metadata)
                                         except ValueError:
                                             media_type_constructors = {
                                                 'image': ImageUrl,
@@ -330,10 +335,10 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                                             }
                                             media_type_prefix = part.mime_type.split('/', 1)[0]
                                             constructor = media_type_constructors.get(media_type_prefix, DocumentUrl)
-                                            binary_part = constructor(url=part.url, media_type=part.mime_type)
+                                            binary_part = constructor(url=part.url, media_type=part.mime_type, vendor_metadata=vendor_metadata)
                                     elif part.data:
                                         binary_part = BinaryContent(
-                                            data=b64decode(part.data), media_type=part.mime_type
+                                            data=b64decode(part.data), media_type=part.mime_type, vendor_metadata=vendor_metadata
                                         )
                                     else:  # pragma: no cover
                                         raise ValueError('BinaryInputContent must have either a `url` or `data` field.')

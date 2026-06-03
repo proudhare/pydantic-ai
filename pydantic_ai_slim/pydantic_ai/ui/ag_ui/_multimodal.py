@@ -31,7 +31,7 @@ def media_url_to_multimodal(
     item: ImageUrl | AudioUrl | VideoUrl | DocumentUrl,
 ) -> ImageInputContent | AudioInputContent | VideoInputContent | DocumentInputContent:
     """Convert a media URL to typed multimodal AG-UI input content."""
-    source = InputContentUrlSource(type='url', value=item.url, mime_type=item.media_type or '')
+    source = InputContentUrlSource(type='url', value=item.url, mime_type=item.media_type or '', vendor_metadata=item.vendor_metadata)
     return _URL_TYPE_MAP[type(item)](source=source)
 
 
@@ -46,7 +46,7 @@ def binary_to_multimodal(
     item: BinaryContent,
 ) -> ImageInputContent | AudioInputContent | VideoInputContent | DocumentInputContent:
     """Convert BinaryContent to typed multimodal AG-UI input content based on media type prefix."""
-    source = InputContentDataSource(type='data', value=item.base64, mime_type=item.media_type)
+    source = InputContentDataSource(type='data', value=item.base64, mime_type=item.media_type, vendor_metadata=item.vendor_metadata)
     content_cls = _MEDIA_PREFIX_TO_CONTENT.get(item.media_type.split('/', 1)[0], DocumentInputContent)
     return content_cls(source=source)
 
@@ -56,15 +56,17 @@ def multimodal_input_to_content(
 ) -> ImageUrl | AudioUrl | VideoUrl | DocumentUrl | BinaryContent:
     """Convert a typed multimodal AG-UI input content back to a Pydantic AI content type."""
     source = part.source
+    # Extract vendor_metadata if present (ag-ui types may support extra fields)
+    vendor_metadata = getattr(source, 'vendor_metadata', None)
     if isinstance(source, InputContentUrlSource):
         media_type = source.mime_type or None
         if isinstance(part, ImageInputContent):
-            return ImageUrl(url=source.value, media_type=media_type)
+            return ImageUrl(url=source.value, media_type=media_type, vendor_metadata=vendor_metadata)
         elif isinstance(part, AudioInputContent):
-            return AudioUrl(url=source.value, media_type=media_type)
+            return AudioUrl(url=source.value, media_type=media_type, vendor_metadata=vendor_metadata)
         elif isinstance(part, VideoInputContent):
-            return VideoUrl(url=source.value, media_type=media_type)
+            return VideoUrl(url=source.value, media_type=media_type, vendor_metadata=vendor_metadata)
         else:
-            return DocumentUrl(url=source.value, media_type=media_type)
+            return DocumentUrl(url=source.value, media_type=media_type, vendor_metadata=vendor_metadata)
     else:
-        return BinaryContent(data=b64decode(source.value), media_type=source.mime_type)
+        return BinaryContent(data=b64decode(source.value), media_type=source.mime_type, vendor_metadata=vendor_metadata)
