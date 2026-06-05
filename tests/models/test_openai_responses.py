@@ -38,6 +38,7 @@ from pydantic_ai import (
     ToolCallPartDelta,
     ToolReturnPart,
     UnexpectedModelBehavior,
+    UploadedFile,
     UsageLimitExceeded,
     UserError,
     UserPromptPart,
@@ -11447,6 +11448,55 @@ async def test_openai_responses_text_content_input(allow_model_requests: None, o
     )
     assert m == snapshot(
         {'role': 'user', 'content': [{'text': 'test', 'type': 'input_text'}, {'text': 'test2', 'type': 'input_text'}]}
+    )
+
+
+async def test_openai_responses_uploaded_file_image_mapping(allow_model_requests: None, openai_api_key: str):
+    """Test that UploadedFile with image media_type is mapped to input_image, not input_file."""
+    model = OpenAIResponsesModel('gpt-5.2', provider=OpenAIProvider(api_key=openai_api_key))
+
+    # Test image file mapping in user prompt
+    image_file = UploadedFile(file_id='file-img123', provider_name='openai', media_type='image/png')
+    m = await model._map_user_prompt(  # pyright: ignore[reportPrivateUsage]
+        part=UserPromptPart(content=['Describe this image', image_file])
+    )
+    assert m == snapshot(
+        {
+            'role': 'user',
+            'content': [
+                {'text': 'Describe this image', 'type': 'input_text'},
+                {'type': 'input_image', 'file_id': 'file-img123', 'detail': 'auto'},
+            ],
+        }
+    )
+
+    # Test document file mapping (should still use input_file)
+    doc_file = UploadedFile(file_id='file-doc456', provider_name='openai', media_type='application/pdf')
+    m = await model._map_user_prompt(  # pyright: ignore[reportPrivateUsage]
+        part=UserPromptPart(content=['What is in this document?', doc_file])
+    )
+    assert m == snapshot(
+        {
+            'role': 'user',
+            'content': [
+                {'text': 'What is in this document?', 'type': 'input_text'},
+                {'type': 'input_file', 'file_id': 'file-doc456'},
+            ],
+        }
+    )
+
+    # Test image file mapping in tool return output
+    tool_return = ToolReturnPart(
+        tool_name='test_tool',
+        content='Here is an image result',
+        files=[image_file],
+    )
+    output = await model._map_tool_return_output(tool_return)  # pyright: ignore[reportPrivateUsage]
+    assert output == snapshot(
+        [
+            {'type': 'input_text', 'text': 'Here is an image result'},
+            {'type': 'input_image', 'file_id': 'file-img123', 'detail': 'auto'},
+        ]
     )
 
 
