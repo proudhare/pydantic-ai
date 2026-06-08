@@ -10,6 +10,7 @@ from pydantic_ai.exceptions import ModelAPIError
 
 from .. import ModelHTTPError, usage
 from .._utils import generate_tool_call_id as _generate_tool_call_id, guard_tool_call_id as _guard_tool_call_id
+from ._tool_choice import resolve_tool_choice
 from ..messages import (
     CachePoint,
     CompactionPart,
@@ -179,6 +180,7 @@ class CohereModel(Model[AsyncClientV2]):
         model_request_parameters: ModelRequestParameters,
     ) -> V2ChatResponse:
         tools = self._get_tools(model_request_parameters)
+        tool_choice = self._get_tool_choice(model_settings, model_request_parameters)
 
         cohere_messages = self._map_messages(messages, model_request_parameters)
         try:
@@ -186,6 +188,7 @@ class CohereModel(Model[AsyncClientV2]):
                 model=self._model_name,
                 messages=cohere_messages,
                 tools=tools or OMIT,
+                tool_choice=tool_choice or OMIT,
                 max_tokens=model_settings.get('max_tokens', OMIT),
                 stop_sequences=model_settings.get('stop_sequences', OMIT),
                 temperature=model_settings.get('temperature', OMIT),
@@ -283,6 +286,40 @@ class CohereModel(Model[AsyncClientV2]):
 
     def _get_tools(self, model_request_parameters: ModelRequestParameters) -> list[ToolV2]:
         return [self._map_tool_definition(r) for r in model_request_parameters.tool_defs.values()]
+
+    def _get_tool_choice(
+        self,
+        model_settings: CohereModelSettings,
+        model_request_parameters: ModelRequestParameters,
+    ) -> str | None:
+        """Get tool choice for the model.
+
+        Returns the tool_choice value to send to Cohere API, or None if not applicable.
+
+        Cohere expects:
+        - "REQUIRED": Model must use a tool
+        - "NONE": Model should not use tools
+        - Tool name string: Model should use a specific tool
+        """
+        resolved_tool_choice = resolve_tool_choice(model_settings, model_request_parameters)
+
+        if resolved_tool_choice == 'auto':
+            # Auto is the default, no need to send
+            return None
+        elif resolved_tool_choice == 'required':
+            return 'REQUIRED'
+        elif resolved_tool_choice == 'none':
+            return 'NONE'
+        elif isinstance(resolved_tool_choice, tuple):
+            tool_choice_mode, tool_names = resolved_tool_choice
+            # Cohere doesn't support restricting to a subset of tools via API parameter
+            # If only one tool is specified, we can send its name
+            if len(tool_names) == 1:
+                return next(iter(tool_names))
+            # Otherwise, fall back to REQUIRED or auto (None)
+            return 'REQUIRED' if tool_choice_mode == 'required' else None
+        else:
+            assert_never(resolved_tool_choice)
 
     @staticmethod
     def _map_tool_call(t: ToolCallPart) -> ToolCallV2:
