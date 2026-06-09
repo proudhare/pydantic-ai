@@ -4884,6 +4884,59 @@ async def test_adapter_dump_load_roundtrip_with_message_metadata():
     assert not reloaded_response.usage.has_values()
 
 
+async def test_adapter_dump_load_roundtrip_preserves_loaded_capabilities():
+    """Test that dump_messages and load_messages preserve LoadCapability part types.
+
+    Regression test for issue #5846: deferred capability state must be preserved
+    through the Vercel AI adapter round-trip so parse_loaded_capabilities works
+    after message history reload.
+    """
+    from pydantic_ai._deferred_capabilities import (
+        LoadCapabilityCallPart,
+        LoadCapabilityReturnPart,
+        parse_loaded_capabilities,
+    )
+
+    original_messages = [
+        ModelResponse(
+            parts=[
+                LoadCapabilityCallPart(
+                    tool_call_id='load-foobar',
+                    args={'id': 'foobar'},
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                LoadCapabilityReturnPart(
+                    tool_call_id='load-foobar',
+                    content={'instructions': '# Foo Bar'},
+                )
+            ]
+        ),
+    ]
+
+    # Verify original messages are correctly typed
+    assert parse_loaded_capabilities(original_messages) == {'foobar'}
+
+    # Dump to Vercel AI format and load back
+    ui_messages = VercelAIAdapter.dump_messages(original_messages)
+    reloaded_messages = VercelAIAdapter.load_messages(ui_messages)
+
+    # Verify the round-trip preserves the LoadCapability part types
+    assert len(reloaded_messages) == 2
+    assert isinstance(reloaded_messages[0], ModelResponse)
+    assert len(reloaded_messages[0].parts) == 1
+    assert isinstance(reloaded_messages[0].parts[0], LoadCapabilityCallPart)
+
+    assert isinstance(reloaded_messages[1], ModelRequest)
+    assert len(reloaded_messages[1].parts) == 1
+    assert isinstance(reloaded_messages[1].parts[0], LoadCapabilityReturnPart)
+
+    # Verify parse_loaded_capabilities still works after round-trip
+    assert parse_loaded_capabilities(reloaded_messages) == {'foobar'}
+
+
 async def test_adapter_message_metadata_application_only_roundtrip():
     """Application-only metadata (no `pydantic_ai` key) round-trips unchanged."""
     response = ModelResponse(

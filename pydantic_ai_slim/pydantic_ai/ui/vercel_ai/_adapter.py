@@ -441,39 +441,45 @@ class VercelAIAdapter(UIAdapter[RequestData, UIMessage, BaseChunk, AgentDepsT, O
                                     )
                                 )
                         else:
-                            builder.add(
-                                ToolCallPart(
-                                    tool_name=tool_name,
-                                    tool_call_id=tool_call_id,
-                                    args=args,
-                                    id=part_id,
-                                    provider_name=provider_name,
-                                    provider_details=provider_details,
-                                )
+                            # Detect load_capability tool calls and set tool_kind for proper type reconstruction
+                            tool_kind = 'capability-load' if tool_name == 'load_capability' else None
+                            tool_call = ToolCallPart(
+                                tool_name=tool_name,
+                                tool_call_id=tool_call_id,
+                                args=args,
+                                id=part_id,
+                                provider_name=provider_name,
+                                provider_details=provider_details,
+                                tool_kind=tool_kind,
                             )
+                            builder.add(ToolCallPart.narrow_type(tool_call, tool_kind=tool_kind))
 
                             if part.state == 'output-available':
-                                builder.add(
-                                    ToolReturnPart(tool_name=tool_name, tool_call_id=tool_call_id, content=part.output)
+                                tool_return = ToolReturnPart(
+                                    tool_name=tool_name,
+                                    tool_call_id=tool_call_id,
+                                    content=part.output,
+                                    tool_kind=tool_kind,
                                 )
+                                builder.add(ToolReturnPart.narrow_type(tool_return, tool_kind=tool_kind))
                             elif part.state == 'output-error':
-                                builder.add(
-                                    ToolReturnPart(
-                                        tool_name=tool_name,
-                                        tool_call_id=tool_call_id,
-                                        content=part.error_text,
-                                        outcome='failed',
-                                    )
+                                tool_return = ToolReturnPart(
+                                    tool_name=tool_name,
+                                    tool_call_id=tool_call_id,
+                                    content=part.error_text,
+                                    outcome='failed',
+                                    tool_kind=tool_kind,
                                 )
+                                builder.add(ToolReturnPart.narrow_type(tool_return, tool_kind=tool_kind))
                             elif part.state == 'output-denied':
-                                builder.add(
-                                    ToolReturnPart(
-                                        tool_name=tool_name,
-                                        tool_call_id=tool_call_id,
-                                        content=_denial_reason(part),
-                                        outcome='denied',
-                                    )
+                                tool_return = ToolReturnPart(
+                                    tool_name=tool_name,
+                                    tool_call_id=tool_call_id,
+                                    content=_denial_reason(part),
+                                    outcome='denied',
+                                    tool_kind=tool_kind,
                                 )
+                                builder.add(ToolReturnPart.narrow_type(tool_return, tool_kind=tool_kind))
                     elif isinstance(part, DataUIPart):  # pragma: no cover
                         # Contains custom data that shouldn't be sent to the model
                         pass
