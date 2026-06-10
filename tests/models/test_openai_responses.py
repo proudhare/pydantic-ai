@@ -38,6 +38,7 @@ from pydantic_ai import (
     ToolCallPartDelta,
     ToolReturnPart,
     UnexpectedModelBehavior,
+    UploadedFile,
     UsageLimitExceeded,
     UserError,
     UserPromptPart,
@@ -12067,3 +12068,47 @@ def test_openai_responses_phase_profile_flag():
     assert cast(Any, openai_model_profile('gpt-5.2')).openai_supports_phase is False
     assert cast(Any, openai_model_profile('gpt-5')).openai_supports_phase is False
     assert cast(Any, openai_model_profile('gpt-4o')).openai_supports_phase is False
+
+
+async def test_openai_responses_tool_return_uploaded_file_provider_mismatch(env: TestEnv):
+    """Test that UploadedFile with mismatched provider_name raises UserError in tool returns."""
+    env.set('OPENAI_API_KEY', 'test')
+    provider = OpenAIProvider()
+    model = OpenAIResponsesModel('gpt-4o', provider=provider)
+
+    # Create a ToolReturnPart with an UploadedFile that has a mismatched provider_name
+    tool_return = ToolReturnPart(
+        tool_name='test_tool',
+        content=[UploadedFile(file_id='file-abc123', provider_name='anthropic')],
+        tool_call_id='call_123',
+    )
+
+    # Should raise UserError with clear message about provider_name mismatch
+    with pytest.raises(
+        UserError,
+        match=r'UploadedFile with `provider_name=\'anthropic\'` cannot be used with OpenAIResponsesModel\. '
+        r'Expected `provider_name` to be \'openai\'',
+    ):
+        await model._map_tool_return_output(tool_return)  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_openai_responses_tool_return_uploaded_file_provider_match(env: TestEnv):
+    """Test that UploadedFile with matching provider_name works correctly in tool returns."""
+    env.set('OPENAI_API_KEY', 'test')
+    provider = OpenAIProvider()
+    model = OpenAIResponsesModel('gpt-4o', provider=provider)
+
+    # Create a ToolReturnPart with an UploadedFile that has a matching provider_name
+    tool_return = ToolReturnPart(
+        tool_name='test_tool',
+        content=[UploadedFile(file_id='file-abc123', provider_name='openai')],
+        tool_call_id='call_123',
+    )
+
+    # Should not raise, and should return the expected format
+    result = await model._map_tool_return_output(tool_return)  # pyright: ignore[reportPrivateUsage]
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]['type'] == 'input_file'  # type: ignore
+    assert result[0]['file_id'] == 'file-abc123'  # type: ignore
