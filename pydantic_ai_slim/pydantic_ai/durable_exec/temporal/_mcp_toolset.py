@@ -56,6 +56,17 @@ class TemporalMCPToolset(TemporalMCPToolsetBase[AgentDepsT]):
         return self._toolset.tool_for_tool_def(tool_def)
 
     async def get_tools(self, ctx: RunContext[AgentDepsT]) -> dict[str, ToolsetTool[AgentDepsT]]:
+        from temporalio import workflow
+
+        # When in workflow, always schedule the activity to maintain determinism.
+        # Temporal's own activity result caching handles deduplication across executions.
+        # The instance cache is only used outside of workflows to avoid redundant MCP connections.
+        if workflow.in_workflow():
+            result = await super().get_tools(ctx)
+            if self._toolset.cache_tools:  # pragma: no branch
+                self._cached_tool_defs = {name: tool.tool_def for name, tool in result.items()}
+            return result
+
         if self._toolset.cache_tools and self._cached_tool_defs is not None:
             return {name: self.tool_for_tool_def(td) for name, td in self._cached_tool_defs.items()}
 
