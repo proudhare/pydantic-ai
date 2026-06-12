@@ -2245,6 +2245,54 @@ async def test_temporal_agent_with_unserializable_deps_type(allow_model_requests
             )
 
 
+@dataclass
+class ProviderFactoryDeps:
+    tenant_id: str
+
+
+def provider_factory_with_deps_check(ctx: RunContext[ProviderFactoryDeps], provider_name: str) -> Any:
+    """Provider factory that accesses deps to verify correct type deserialization."""
+    # This would raise AttributeError if deps arrives as a dict instead of dataclass
+    assert isinstance(ctx.deps, ProviderFactoryDeps)
+    assert ctx.deps.tenant_id == 'test-tenant'
+    # Return the test model
+    return TestModel()
+
+
+provider_factory_agent = Agent('test', name='provider_factory_agent', deps_type=ProviderFactoryDeps)
+provider_factory_temporal_agent = TemporalAgent(
+    provider_factory_agent,
+    activity_config=BASE_ACTIVITY_CONFIG,
+    provider_factory=provider_factory_with_deps_check,
+)
+
+
+@workflow.defn
+class ProviderFactoryAgentWorkflow:
+    @workflow.run
+    async def run(self, prompt: str) -> str:
+        result = await provider_factory_temporal_agent.run(prompt, deps=ProviderFactoryDeps(tenant_id='test-tenant'))
+        return result.output
+
+
+async def test_temporal_agent_provider_factory_deps_type(allow_model_requests: None, client: Client):
+    """Regression test for #5893: deps should arrive as dataclass, not dict, in provider_factory."""
+    async with Worker(
+        client,
+        task_queue=TASK_QUEUE,
+        workflows=[ProviderFactoryAgentWorkflow],
+        plugins=[AgentPlugin(provider_factory_temporal_agent)],
+    ):
+        output = await client.execute_workflow(
+            ProviderFactoryAgentWorkflow.run,
+            args=['test prompt'],
+            id=ProviderFactoryAgentWorkflow.__name__,
+            task_queue=TASK_QUEUE,
+        )
+        # The main test is that no AttributeError is raised when accessing deps.tenant_id in the provider factory
+        assert output == 'success (no tool calls)'
+
+
 async def test_logfire_plugin(client: Client):
     def setup_logfire(send_to_logfire: bool = True, metrics: Literal[False] | None = None) -> Logfire:
         instance = logfire.configure(local=True, metrics=metrics)
