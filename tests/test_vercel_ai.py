@@ -4898,6 +4898,63 @@ async def test_adapter_message_metadata_application_only_roundtrip():
     assert reloaded.metadata == {'createdAt': '2026-04-15T12:00:45Z'}
 
 
+@pytest.mark.parametrize(
+    'chunk',
+    [
+        DataChunk(type='data-search-results', id='search-1', data={'results': [1, 2, 3]}),
+        SourceUrlChunk(source_id='url-1', url='https://example.com', title='Example'),
+        SourceDocumentChunk(source_id='doc-1', media_type='application/pdf', title='Document', filename='doc.pdf'),
+        FileChunk(url='data:text/plain;base64,SGVsbG8=', media_type='text/plain'),
+    ],
+    ids=['DataChunk', 'SourceUrlChunk', 'SourceDocumentChunk', 'FileChunk'],
+)
+async def test_tool_return_metadata_chunks_roundtrip(chunk: DataChunk | SourceUrlChunk | SourceDocumentChunk | FileChunk):
+    """ToolReturnPart.metadata data chunks survive dump/load round-trip without relocation or loss."""
+    original_messages = [
+        ModelResponse(
+            parts=[
+                ToolCallPart(tool_name='search', tool_call_id='call-1', args={'query': 'test'}),
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(tool_name='search', tool_call_id='call-1', content='result', metadata=chunk),
+            ]
+        ),
+    ]
+
+    ui_messages = VercelAIAdapter.dump_messages(original_messages)
+    reloaded_messages = VercelAIAdapter.load_messages(ui_messages)
+
+    # Should reload as 2 messages (not 3 or 4), preserving structure
+    assert len(reloaded_messages) == 2
+    assert isinstance(reloaded_messages[0], ModelResponse)
+    assert isinstance(reloaded_messages[1], ModelRequest)
+
+    # ToolReturnPart should have metadata chunk reattached
+    tool_return = next(p for p in reloaded_messages[1].parts if isinstance(p, ToolReturnPart))
+    assert tool_return.tool_call_id == 'call-1'
+    assert tool_return.metadata is not None
+
+    # Verify metadata matches original chunk (single chunk, not list)
+    if isinstance(chunk, DataChunk):
+        assert isinstance(tool_return.metadata, DataChunk)
+        assert tool_return.metadata.type == chunk.type
+        assert tool_return.metadata.data == chunk.data
+    elif isinstance(chunk, SourceUrlChunk):
+        assert isinstance(tool_return.metadata, SourceUrlChunk)
+        assert tool_return.metadata.source_id == chunk.source_id
+        assert tool_return.metadata.url == chunk.url
+    elif isinstance(chunk, SourceDocumentChunk):
+        assert isinstance(tool_return.metadata, SourceDocumentChunk)
+        assert tool_return.metadata.source_id == chunk.source_id
+        assert tool_return.metadata.media_type == chunk.media_type
+    elif isinstance(chunk, FileChunk):
+        assert isinstance(tool_return.metadata, FileChunk)
+        assert tool_return.metadata.url == chunk.url
+        assert tool_return.metadata.media_type == chunk.media_type
+
+
 async def test_adapter_load_application_only_metadata_without_pydantic_block():
     """A `UIMessage.metadata` lacking the `pydantic_ai` key still surfaces application metadata."""
     ui_message = UIMessage(

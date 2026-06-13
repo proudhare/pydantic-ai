@@ -265,6 +265,8 @@ class VercelAIAdapter(UIAdapter[RequestData, UIMessage, BaseChunk, AgentDepsT, O
 
         for msg in messages:
             checkpoint = builder.checkpoint()
+            # Collect metadata chunks to re-bundle into ToolReturnPart.metadata
+            metadata_parts: dict[str, list[DataChunk | SourceUrlChunk | SourceDocumentChunk | FileChunk]] = {}
 
             if msg.role == 'system':
                 for part in msg.parts:
@@ -317,8 +319,13 @@ class VercelAIAdapter(UIAdapter[RequestData, UIMessage, BaseChunk, AgentDepsT, O
                     builder.add(UserPromptPart(content=user_prompt_content))
 
             elif msg.role == 'assistant':
+                # Track the most recent tool output part to pair with immediately-following metadata chunks
+                last_tool_output_id: str | None = None
+
                 for part in msg.parts:
                     if isinstance(part, TextUIPart):
+                        # Text parts reset tool output tracking (they're not metadata chunks)
+                        last_tool_output_id = None
                         provider_meta = load_provider_metadata(part.provider_metadata)
                         builder.add(
                             TextPart(
@@ -329,6 +336,8 @@ class VercelAIAdapter(UIAdapter[RequestData, UIMessage, BaseChunk, AgentDepsT, O
                             )
                         )
                     elif isinstance(part, ReasoningUIPart):
+                        # Reasoning parts reset tool output tracking (they're not metadata chunks)
+                        last_tool_output_id = None
                         provider_meta = load_provider_metadata(part.provider_metadata)
                         builder.add(
                             ThinkingPart(
@@ -340,22 +349,36 @@ class VercelAIAdapter(UIAdapter[RequestData, UIMessage, BaseChunk, AgentDepsT, O
                             )
                         )
                     elif isinstance(part, FileUIPart):
-                        try:
-                            file = BinaryContent.from_data_uri(part.url)
-                        except ValueError as e:  # pragma: no cover
-                            # We don't yet handle non-data-URI file URLs returned by assistants, as no Pydantic AI models do this.
-                            raise ValueError(
-                                'Vercel AI integration can currently only handle assistant file parts with data URIs.'
-                            ) from e
-                        provider_meta = load_provider_metadata(part.provider_metadata)
-                        builder.add(
-                            FilePart(
-                                content=file,
-                                id=provider_meta.get('id'),
-                                provider_name=provider_meta.get('provider_name'),
-                                provider_details=provider_meta.get('provider_details'),
+                        # FileUIParts immediately following a tool output are metadata chunks.
+                        # Other FileUIParts are model-generated FileParts.
+                        if last_tool_output_id:
+                            # This is a metadata chunk from the tool output
+                            try:
+                                file = BinaryContent.from_data_uri(part.url)
+                            except ValueError:
+                                # If not a data URI, treat as URL-based file
+                                file = part.url
+                            metadata_parts.setdefault(last_tool_output_id, []).append(
+                                FileChunk(url=file.data_uri if isinstance(file, BinaryContent) else file, media_type=part.media_type)
                             )
-                        )
+                        else:
+                            # Standalone FileUIPart from model, not from tool metadata
+                            try:
+                                file = BinaryContent.from_data_uri(part.url)
+                            except ValueError as e:  # pragma: no cover
+                                raise ValueError(
+                                    'Vercel AI integration can currently only handle assistant file parts with data URIs.'
+                                ) from e
+                            provider_meta = load_provider_metadata(part.provider_metadata)
+                            builder.add(
+                                FilePart(
+                                    content=file,
+                                    id=provider_meta.get('id'),
+                                    provider_name=provider_meta.get('provider_name'),
+                                    provider_details=provider_meta.get('provider_details'),
+                                )
+                            )
+                            # FilePart doesn't reset tool output tracking (next FileUIPart could still be metadata)
                     elif isinstance(part, ToolUIPart | DynamicToolUIPart):
                         if isinstance(part, DynamicToolUIPart):
                             tool_name = part.tool_name
@@ -440,6 +463,7 @@ class VercelAIAdapter(UIAdapter[RequestData, UIMessage, BaseChunk, AgentDepsT, O
                                         outcome=outcome,
                                     )
                                 )
+                                last_tool_output_id = tool_call_id  # Track for metadata chunk pairing
                         else:
                             builder.add(
                                 ToolCallPart(
@@ -451,11 +475,16 @@ class VercelAIAdapter(UIAdapter[RequestData, UIMessage, BaseChunk, AgentDepsT, O
                                     provider_details=provider_details,
                                 )
                             )
+                            # Tool calls without immediate outputs reset tracking
+                            # (the output may come later in the sequence or be deferred)
+                            if part.state not in ('output-available', 'output-error', 'output-denied'):
+                                last_tool_output_id = None
 
                             if part.state == 'output-available':
                                 builder.add(
                                     ToolReturnPart(tool_name=tool_name, tool_call_id=tool_call_id, content=part.output)
                                 )
+                                last_tool_output_id = tool_call_id  # Track for metadata chunk pairing
                             elif part.state == 'output-error':
                                 builder.add(
                                     ToolReturnPart(
@@ -465,6 +494,7 @@ class VercelAIAdapter(UIAdapter[RequestData, UIMessage, BaseChunk, AgentDepsT, O
                                         outcome='failed',
                                     )
                                 )
+                                last_tool_output_id = tool_call_id  # Track for metadata chunk pairing
                             elif part.state == 'output-denied':
                                 builder.add(
                                     ToolReturnPart(
@@ -474,15 +504,39 @@ class VercelAIAdapter(UIAdapter[RequestData, UIMessage, BaseChunk, AgentDepsT, O
                                         outcome='denied',
                                     )
                                 )
-                    elif isinstance(part, DataUIPart):  # pragma: no cover
-                        # Contains custom data that shouldn't be sent to the model
-                        pass
-                    elif isinstance(part, SourceUrlUIPart):  # pragma: no cover
-                        # TODO: Once we support citations: https://github.com/pydantic/pydantic-ai/issues/3126
-                        pass
-                    elif isinstance(part, SourceDocumentUIPart):  # pragma: no cover
-                        # TODO: Once we support citations: https://github.com/pydantic/pydantic-ai/issues/3126
-                        pass
+                                last_tool_output_id = tool_call_id  # Track for metadata chunk pairing
+                    elif isinstance(part, DataUIPart):
+                        # DataUIPart immediately following a tool output is metadata from that tool
+                        if last_tool_output_id:
+                            metadata_parts.setdefault(last_tool_output_id, []).append(
+                                DataChunk(type=part.type, id=part.id, data=part.data)
+                            )
+                        # Don't reset last_tool_output_id; multiple metadata chunks can follow
+                    elif isinstance(part, SourceUrlUIPart):
+                        # SourceUrlUIPart immediately following a tool output is metadata from that tool
+                        if last_tool_output_id:
+                            metadata_parts.setdefault(last_tool_output_id, []).append(
+                                SourceUrlChunk(
+                                    source_id=part.source_id,
+                                    url=part.url,
+                                    title=part.title,
+                                    provider_metadata=part.provider_metadata,
+                                )
+                            )
+                        # Don't reset last_tool_output_id; multiple metadata chunks can follow
+                    elif isinstance(part, SourceDocumentUIPart):
+                        # SourceDocumentUIPart immediately following a tool output is metadata from that tool
+                        if last_tool_output_id:
+                            metadata_parts.setdefault(last_tool_output_id, []).append(
+                                SourceDocumentChunk(
+                                    source_id=part.source_id,
+                                    media_type=part.media_type,
+                                    title=part.title,
+                                    filename=part.filename,
+                                    provider_metadata=part.provider_metadata,
+                                )
+                            )
+                        # Don't reset last_tool_output_id; multiple metadata chunks can follow
                     elif isinstance(part, StepStartUIPart):  # pragma: no cover
                         # Nothing to do here
                         pass
@@ -490,6 +544,22 @@ class VercelAIAdapter(UIAdapter[RequestData, UIMessage, BaseChunk, AgentDepsT, O
                         assert_never(part)
             else:
                 assert_never(msg.role)
+
+            # Re-attach collected metadata chunks to their ToolReturnParts
+            if msg.role == 'assistant' and metadata_parts:
+                # Iterate through messages added/modified since checkpoint
+                for modified_msg in builder.messages[checkpoint.message_count:]:
+                    for part in modified_msg.parts:
+                        if isinstance(part, ToolReturnPart) and part.tool_call_id in metadata_parts:
+                            chunks = metadata_parts[part.tool_call_id]
+                            # Set metadata to the list of chunks, or single chunk if only one
+                            part.metadata = chunks if len(chunks) > 1 else chunks[0]
+                # Also check the checkpoint message in case it was extended
+                if checkpoint.last_message is not None and checkpoint.last_message in builder.messages:
+                    for part in checkpoint.last_message.parts[checkpoint.last_message_part_count:]:
+                        if isinstance(part, ToolReturnPart) and part.tool_call_id in metadata_parts:
+                            chunks = metadata_parts[part.tool_call_id]
+                            part.metadata = chunks if len(chunks) > 1 else chunks[0]
 
             # Apply metadata to the role-corresponding `ModelMessage`: assistant UIMessages
             # may also append a synthetic `ModelRequest` carrying tool-return parts, which we
