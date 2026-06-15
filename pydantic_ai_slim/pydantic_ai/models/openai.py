@@ -2256,9 +2256,19 @@ class OpenAIResponsesModel(Model[AsyncOpenAI]):
         """Build typed request parameters shared by Responses API calls."""
         function_tools, tool_choice = self._get_responses_tool_choice(model_settings, model_request_parameters)
         extra_native_tools = _resolve_openai_native_tools_setting(model_settings)
-        tools: list[responses.ToolParam] = (
-            self._get_native_tools(model_request_parameters) + list(extra_native_tools) + function_tools
-        )
+        native_tools = self._get_native_tools(model_request_parameters)
+        tools: list[responses.ToolParam] = native_tools + list(extra_native_tools) + function_tools
+
+        # OpenAI requires tool_search when any function tool has defer_loading=True
+        if any(t.get('defer_loading') for t in function_tools):
+            has_tool_search = any(
+                t.get('type') == 'tool_search' for t in tools
+            )
+            if not has_tool_search:
+                # Insert tool_search before function tools to match native tool ordering
+                native_count = len(native_tools) + len(list(extra_native_tools))
+                tools.insert(native_count, ToolSearchToolParam(type='tool_search'))
+
         if not tools:
             tool_choice = None
 
