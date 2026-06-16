@@ -663,3 +663,22 @@ async def test_cohere_model_builtin_tools(allow_model_requests: None, co_api_key
     agent = Agent(m, capabilities=[NativeTool(WebSearchTool())])
     with pytest.raises(UserError, match=r"Native tool\(s\) \['WebSearchTool'\] not supported by this model"):
         await agent.run('Hello')
+
+
+async def test_cohere_model_cached_tokens_forwarded(allow_model_requests: None):
+    """Verify usage.cached_tokens from the Cohere v2 response is mapped to RequestUsage.cache_read_tokens."""
+    c = completion_message(
+        AssistantMessageResponse(content=[TextAssistantMessageResponseContentItem(text='world')]),
+        usage=cohere.Usage(
+            tokens=cohere.UsageTokens(input_tokens=10, output_tokens=5),
+            billed_units=cohere.UsageBilledUnits(input_tokens=10, output_tokens=5),
+            cached_tokens=42,
+        ),
+    )
+    mock_client = MockAsyncClientV2.create_mock(c)
+    m = CohereModel('command-r7b-12-2024', provider=CohereProvider(cohere_client=mock_client))
+    agent = Agent(m)
+
+    result = await agent.run('hello')
+
+    assert result.usage.cache_read_tokens == 42
