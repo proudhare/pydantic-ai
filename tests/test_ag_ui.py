@@ -5205,4 +5205,47 @@ async def test_interrupt_resume_roundtrip_executes_approved_tool() -> None:
     assert run_finished_2['outcome'] == snapshot({'type': 'success'})
 
 
+def test_dump_messages_preserves_tool_return_user_prompt_order() -> None:
+    """Test that dump_messages preserves the order of ToolReturnPart followed by UserPromptPart.
+
+    Regression test for issue #5964: AGUIAdapter.dump_messages() was reordering messages
+    when a ModelRequest contained both ToolReturnPart and UserPromptPart, breaking providers
+    that require tool results to immediately follow tool use blocks (e.g., Anthropic/Bedrock).
+    """
+    messages: list[ModelMessage] = [
+        ModelResponse(
+            parts=[
+                TextPart(content='Please answer the question.'),
+                ToolCallPart(
+                    tool_name='suggest_answer',
+                    args={'suggestions': ['Yes', 'No']},
+                    tool_call_id='toolu_1',
+                ),
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name='suggest_answer',
+                    content="['Yes', 'No'] suggested.",
+                    tool_call_id='toolu_1',
+                ),
+                UserPromptPart(content='Yes, I confirm.'),
+            ]
+        ),
+    ]
+
+    ag_ui_msgs = AGUIAdapter.dump_messages(messages)
+
+    # Verify the order: AssistantMessage, ToolMessage, UserMessage
+    assert len(ag_ui_msgs) == 3
+    assert isinstance(ag_ui_msgs[0], AssistantMessage)
+    assert ag_ui_msgs[0].content == 'Please answer the question.'
+    assert isinstance(ag_ui_msgs[1], ToolMessage)
+    assert ag_ui_msgs[1].tool_call_id == 'toolu_1'
+    assert ag_ui_msgs[1].content == "['Yes', 'No'] suggested."
+    assert isinstance(ag_ui_msgs[2], UserMessage)
+    assert ag_ui_msgs[2].content == 'Yes, I confirm.'
+
+
 # endregion
