@@ -786,6 +786,16 @@ def _map_usage(
         if isinstance(v, int)
     }
 
+    # Extract cached_tokens from prompt_tokens_details
+    if response_usage.prompt_tokens_details is not None:
+        if cached := response_usage.prompt_tokens_details.cached_tokens:
+            details['cached_tokens'] = cached
+
+    # Extract reasoning_tokens from completion_tokens_details
+    if response_usage.completion_tokens_details is not None:
+        if reasoning := response_usage.completion_tokens_details.reasoning_tokens:
+            details['reasoning_tokens'] = reasoning
+
     return usage.RequestUsage.extract(
         dict(model=model, usage=usage_data),
         provider=provider,
