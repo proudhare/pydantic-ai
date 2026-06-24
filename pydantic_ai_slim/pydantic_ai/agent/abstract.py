@@ -548,7 +548,9 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         if infer_name and self.name is None:
             self._infer_name(inspect.currentframe())
 
-        return _utils.get_event_loop().run_until_complete(
+        loop = _utils.get_event_loop()
+        return _utils.run_until_complete_with_cleanup(
+            loop,
             self.run(
                 user_prompt,
                 output_type=output_type,
@@ -1022,7 +1024,8 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
             ) as stream_result:
                 yield stream_result
 
-        async_result = _utils.get_event_loop().run_until_complete(anext(_consume_stream()))
+        loop = _utils.get_event_loop()
+        async_result = _utils.run_until_complete_with_cleanup(loop, anext(_consume_stream()))
         return result.StreamedRunResultSync(async_result)
 
     @overload

@@ -398,7 +398,7 @@ def sync_async_iterator(async_iter: AsyncIterator[T]) -> Iterator[T]:
     loop = get_event_loop()
     while True:
         try:
-            yield loop.run_until_complete(anext(async_iter))
+            yield run_until_complete_with_cleanup(loop, anext(async_iter))
         except StopAsyncIteration:
             break
 
@@ -806,6 +806,28 @@ def get_event_loop():
         event_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(event_loop)
     return event_loop
+
+
+def run_until_complete_with_cleanup(loop: asyncio.AbstractEventLoop, coro):
+    """Run a coroutine with proper cleanup on interruption.
+
+    When KeyboardInterrupt or other base exceptions occur, cancel all pending
+    tasks, gather them to handle cancellation, shut down async generators,
+    then re-raise the exception.
+    """
+    try:
+        return loop.run_until_complete(coro)
+    except BaseException:
+        # Cancel all pending tasks
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        # Gather all tasks to handle their cancellation
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        # Shut down async generators to close any open sockets
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        raise
 
 
 def is_str_dict(obj: Any) -> TypeGuard[dict[str, Any]]:
