@@ -2952,6 +2952,50 @@ def test_native_output_strict_mode():
     assert output_schema.object_def.strict
 
 
+def test_native_output_with_early_strategy_skips_tool_calls():
+    """Test that with NativeOutput and end_strategy='early', tool calls are skipped when valid output is available."""
+    tool_called = []
+
+    def return_response_with_tools(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        # Return both valid native output in text AND a tool call
+        return ModelResponse(
+            parts=[
+                TextPart(content='{"name": "Alice", "age": 30}'),
+                ToolCallPart(tool_name='search_tool', args={'query': 'test'}),
+            ]
+        )
+
+    class Person(BaseModel):
+        name: str
+        age: int
+
+    agent = Agent(
+        FunctionModel(return_response_with_tools),
+        output_type=NativeOutput(Person),
+        end_strategy='early',
+    )
+
+    @agent.tool_plain
+    def search_tool(query: str) -> str:
+        """Search tool that should not be called."""
+        tool_called.append('search_tool')
+        return 'search results'
+
+    result = agent.run_sync('Get person info')
+
+    # Verify the native output was processed
+    assert result.output == snapshot(Person(name='Alice', age=30))
+
+    # Verify the tool was NOT called (early strategy with valid output)
+    assert tool_called == []
+
+    # Verify message structure
+    messages = result.all_messages()
+    assert len(messages) == 2
+    assert isinstance(messages[0], ModelRequest)
+    assert isinstance(messages[1], ModelResponse)
+
+
 def test_prompted_output_function_with_retry():
     class Weather(BaseModel):
         temperature: float
