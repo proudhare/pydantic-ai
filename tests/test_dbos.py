@@ -1770,7 +1770,7 @@ class _TestDBOSMCPToolset(DBOSMCPToolsetBase[int]):
 
 
 _uninit_instructions_toolset = _TestDBOSMCPToolset(
-    MCPToolset(StdioTransport(command='python', args=['-m', 'tests.mcp_server']), include_instructions=True),
+    MCPToolset(StdioTransport(command='python', args=['-m', 'tests.mcp_server']), include_instructions=True, id='coverage_test'),
     step_name_prefix='coverage_test',
     step_config={},
 )
@@ -1904,3 +1904,17 @@ def test_dbos_mcp_wrapper_visit_and_replace():
     # visit_and_replace should return self for DBOS wrappers
     result = dbos_mcp_toolset.visit_and_replace(lambda t: FunctionToolset(id='replaced'))
     assert result is dbos_mcp_toolset
+
+
+def test_dbos_mcp_toolset_rejects_id_less_toolset(dbos: DBOS):
+    """#5885 regression: DBOS MCP toolsets must have a unique id to prevent cache key and step name collisions."""
+    from pydantic_ai.durable_exec.dbos._mcp_toolset import DBOSMCPToolset
+
+    id_less_toolset = MCPToolset('https://example.com/mcp')
+    assert id_less_toolset.id is None
+
+    with pytest.raises(
+        UserError,
+        match=r'MCP toolsets used with DBOS must have a unique `id` set\. This ensures unique DBOS step names and prevents tool-definition cache collisions\.',
+    ):
+        DBOSMCPToolset(id_less_toolset, step_name_prefix='test', step_config={})

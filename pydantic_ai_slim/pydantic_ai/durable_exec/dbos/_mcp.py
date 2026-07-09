@@ -8,6 +8,7 @@ from dbos import DBOS
 from typing_extensions import Self
 
 from pydantic_ai import AbstractToolset, ToolsetTool, WrapperToolset
+from pydantic_ai.exceptions import UserError
 from pydantic_ai.messages import InstructionPart
 from pydantic_ai.tools import AgentDepsT, RunContext, ToolDefinition
 
@@ -28,9 +29,14 @@ class DBOSMCPToolsetBase(WrapperToolset[AgentDepsT], ABC):
         step_config: StepConfig,
     ):
         super().__init__(wrapped)
+        if wrapped.id is None:
+            raise UserError(
+                'MCP toolsets used with DBOS must have a unique `id` set. '
+                'This ensures unique DBOS step names and prevents tool-definition cache collisions.'
+            )
         self._step_config = step_config or {}
         self._step_name_prefix = step_name_prefix
-        id_suffix = f'__{wrapped.id}' if wrapped.id else ''
+        id_suffix = f'__{wrapped.id}'
         self._name = f'{step_name_prefix}__mcp_server{id_suffix}'
 
         # Wrap get_tools in a DBOS step.
@@ -110,7 +116,8 @@ class DBOSMCPToolsetBase(WrapperToolset[AgentDepsT], ABC):
         # identically on recovery, so whether the get_tools step is invoked depends only on the
         # workflow's own progress. Caching on the process-shared instance instead would make that
         # depend on what earlier runs warmed in the worker, shifting recorded step order on recovery.
-        cache_key = self.id or ''
+        cache_key = self.id
+        assert cache_key is not None  # guaranteed by __init__
         if self._cache_tools and (cached := ctx._mcp_tool_defs_cache.get(cache_key)) is not None:  # pyright: ignore[reportPrivateUsage]
             return {name: self.tool_for_tool_def(tool_def) for name, tool_def in cached.items()}
 
