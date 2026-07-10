@@ -1504,6 +1504,9 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
             try:
                 await asyncio.wait({_ready_waiter, _wrap_task}, return_when=asyncio.FIRST_COMPLETED)
             except BaseException:
+                # Set _run_done first so if _wrap_task survives its cancellation (e.g. under
+                # Temporal's cooperative cancellation), it won't deadlock waiting for _run_done.
+                _run_done.set()
                 await _utils.cancel_and_drain(_ready_waiter, _wrap_task)
                 raise
             else:
