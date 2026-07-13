@@ -4774,6 +4774,20 @@ def test_map_usage_bedrock_start_event_without_message():
     assert _map_usage(start, 'anthropic', '', 'unknown', existing_usage=existing) == existing
 
 
+def test_map_usage_delta_event_without_usage():
+    """In streaming scenarios, delta events may have None usage objects.
+    `_map_usage` must handle `message.usage=None` gracefully without dereferencing it (https://github.com/pydantic/pydantic-ai/issues/6441).
+
+    A unit test rather than VCR: simulates edge cases where the SDK may pass None usage in streaming.
+    """
+    # `model_construct` skips validation to simulate SDK behavior with None usage.
+    delta = BetaRawMessageDeltaEvent.model_construct(type='message_delta', delta=Delta(), usage=None)
+    assert _map_usage(delta, 'anthropic', '', 'unknown') == snapshot(RequestUsage())
+
+    existing = RequestUsage(input_tokens=10, output_tokens=5)
+    assert _map_usage(delta, 'anthropic', '', 'unknown', existing_usage=existing) == existing
+
+
 async def test_streaming_bedrock_start_event_without_message_is_skipped(allow_model_requests: None):
     """A Bedrock `message=None` start event must be skipped across the whole streaming path (https://github.com/pydantic/pydantic-ai/issues/5774).
 

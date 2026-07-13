@@ -2274,7 +2274,7 @@ class AnthropicCompaction(AbstractCapability[AgentDepsT]):
 _COMPACTION_TOKEN_KEYS = ('input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens')
 
 
-def _extract_usage_details(response_usage: BetaUsage | BetaMessageDeltaUsage) -> dict[str, int]:
+def _extract_usage_details(response_usage: BetaUsage | BetaMessageDeltaUsage | None) -> dict[str, int]:
     """Extract Anthropic usage into a flat dict, preserving compaction iteration totals.
 
     Anthropic's top-level `input_tokens`/`output_tokens` exclude compaction iteration usage
@@ -2284,6 +2284,10 @@ def _extract_usage_details(response_usage: BetaUsage | BetaMessageDeltaUsage) ->
     which also keeps streaming correct: the fixed compaction totals set by the start event
     survive the merge with delta events that only carry the top-level values.
     """
+    # In Bedrock/streaming scenarios, the SDK may pass None for usage objects
+    if response_usage is None:  # pyright: ignore[reportUnnecessaryComparison]
+        return {}
+
     details: dict[str, int] = {}
     for key in _COMPACTION_TOKEN_KEYS:
         if isinstance((value := getattr(response_usage, key, None)), int):
