@@ -110,6 +110,36 @@ def test_reasoning_matrix(case: ReasoningCase):
     assert profile.get('thinking_always_enabled', False) is (case.enabled_by_default and not case.can_be_disabled)
 
 
+def test_vendor_prefixed_model_names():
+    """Vendor-prefixed model IDs (e.g., openai.gpt-5.6-sol) should match capabilities correctly."""
+    # Test case 1: gpt-5.6-sol with openai. prefix should have same capabilities as bare name
+    bare = openai_model_profile('gpt-5.6-sol')
+    prefixed = openai_model_profile('openai.gpt-5.6-sol')
+
+    assert bare['openai_supports_phase'] is True
+    assert prefixed['openai_supports_phase'] is True
+    assert bare['supports_image_output'] is True
+    assert prefixed['supports_image_output'] is True
+    assert bare['thinking_always_enabled'] is False
+    assert prefixed['thinking_always_enabled'] is False
+    assert bare['openai_supports_reasoning'] is True
+    assert prefixed['openai_supports_reasoning'] is True
+
+    # Test case 2: gpt-oss-120b (non-reasoning model) should not enable reasoning with openai. prefix
+    bare_oss = openai_model_profile('gpt-oss-120b')
+    prefixed_oss = openai_model_profile('openai.gpt-oss-120b')
+
+    assert bare_oss['openai_supports_reasoning'] is False
+    assert prefixed_oss['openai_supports_reasoning'] is False
+    assert bare_oss.get('thinking_always_enabled', False) is False
+    assert prefixed_oss.get('thinking_always_enabled', False) is False
+
+    # Test case 3: bedrock. prefix should also work
+    bedrock_prefixed = openai_model_profile('bedrock.gpt-5.6-sol')
+    assert bedrock_prefixed['openai_supports_phase'] is True
+    assert bedrock_prefixed['supports_image_output'] is True
+
+
 class TestEncryptedReasoningContent:
     """Tests for encrypted reasoning content support."""
 
