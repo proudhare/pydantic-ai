@@ -358,7 +358,14 @@ def capture_current_context() -> Callable[[], AbstractContextManager[None]]:
         try:
             yield
         finally:
-            otel_context.detach(token)
+            try:
+                otel_context.detach(token)
+            except ValueError:
+                # When a streamed run is interrupted mid-segment (e.g., usage limits, cancellation),
+                # the generator finalizes in a different async Context than the one the token was
+                # created in. OpenTelemetry's detach raises ValueError in this case, but the
+                # context mismatch during generator teardown is expected and non-fatal.
+                pass
 
     return attach_captured_context
 
