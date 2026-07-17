@@ -3246,3 +3246,65 @@ async def test_mistral_empty_response_skipped_in_history(allow_model_requests: N
     second_call_messages = get_mock_chat_completion_kwargs(mock_client)[1]['messages']
     assert not any(message.role == 'assistant' for message in second_call_messages)
     assert [message.role for message in second_call_messages] == ['user', 'user']
+
+
+async def test_stream_no_tools_forwards_model_settings(allow_model_requests: None):
+    """Test that streaming without tools forwards all model settings."""
+    stream = [text_chunk('hello'), text_chunk(' world', finish_reason='stop')]
+    mock_client = MockMistralAI.create_stream_mock(stream)
+    model = MistralModel('mistral-large-latest', provider=MistralProvider(mistral_client=mock_client))
+    agent = Agent(
+        model=model,
+        model_settings={
+            'temperature': 0.5,
+            'max_tokens': 100,
+            'seed': 42,
+            'stop_sequences': ['STOP', 'END'],
+            'presence_penalty': 0.1,
+            'frequency_penalty': 0.2,
+            'timeout': 30.0,
+        },
+    )
+
+    async with agent.run_stream('test prompt') as result:
+        async for _ in result.stream_text(debounce_by=None):
+            pass
+
+    # Check that all settings were forwarded to the SDK call
+    kwargs = mock_client.chat_completion_kwargs[0]
+    assert kwargs['temperature'] == 0.5
+    assert kwargs['max_tokens'] == 100
+    assert kwargs['random_seed'] == 42  # seed mapped to random_seed
+    assert kwargs['stop'] == ['STOP', 'END']
+    assert kwargs['presence_penalty'] == 0.1
+    assert kwargs['frequency_penalty'] == 0.2
+    assert kwargs['timeout_ms'] == 30000  # converted to milliseconds
+
+
+async def test_stream_with_tools_forwards_seed_as_random_seed(allow_model_requests: None):
+    """Test that streaming with tools forwards seed as random_seed."""
+    stream = [
+        func_chunk(
+            [
+                MistralToolCall(
+                    id='1', type='function', function=MistralFunctionCall(name='get_location', arguments={})
+                )
+            ],
+            finish_reason='tool_calls',
+        ),
+    ]
+    mock_client = MockMistralAI.create_stream_mock(stream)
+    model = MistralModel('mistral-large-latest', provider=MistralProvider(mistral_client=mock_client))
+
+    async def get_location() -> str:
+        return 'San Francisco'
+
+    agent = Agent(model=model, tools=[get_location], model_settings={'seed': 12345})
+
+    async with agent.run_stream('test prompt') as result:
+        async for _ in result.stream():
+            pass
+
+    # Check that seed was mapped to random_seed
+    kwargs = mock_client.chat_completion_kwargs[0]
+    assert kwargs['random_seed'] == 12345
