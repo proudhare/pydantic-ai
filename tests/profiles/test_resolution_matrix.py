@@ -124,6 +124,7 @@ _CANONICAL_DEFAULTS: dict[str, Any] = {
     'openai_responses_requires_function_call_status_none': False,
     'openai_supports_phase': False,
     'openai_chat_supports_document_input': True,
+    'openai_chat_supports_max_completion_tokens': True,
     # AnthropicModelProfile subclass defaults
     'anthropic_supports_fast_speed': False,
     'anthropic_supports_adaptive_thinking': False,
@@ -1063,6 +1064,7 @@ def test_azure_mistral_prefix():
         {
             'json_schema_transformer': OpenAIJsonSchemaTransformer,
             'openai_chat_supports_document_input': False,
+            'openai_chat_supports_max_completion_tokens': False,
         }
     )
 
