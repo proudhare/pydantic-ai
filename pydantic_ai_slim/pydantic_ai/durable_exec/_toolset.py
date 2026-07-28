@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, cast
@@ -98,6 +99,13 @@ async def call_dynamic_tool(
                 'The dynamic toolset function may have returned a different toolset than expected.'
             )
         args = tool.args_validator.validate_python(tool_args)
+
+        # Run custom args_validator_func if present (after schema validation, before tool execution)
+        if tool.args_validator_func is not None:
+            result = tool.args_validator_func(ctx, **args)
+            if inspect.isawaitable(result):
+                await result
+
         return await run_toolset.call_tool(name, args, ctx, tool)
 
 
