@@ -267,9 +267,18 @@ class ToolManager(Generic[AgentDepsT]):
             )
 
         if tool.args_validator_func is not None:
-            result = tool.args_validator_func(ctx, **args_dict)
-            if inspect.isawaitable(result):
-                await result
+            # Skip custom validator in Temporal workflow context - it will run in the activity
+            try:
+                from temporalio import workflow
+
+                in_workflow = workflow.in_workflow()
+            except ImportError:
+                in_workflow = False
+
+            if not in_workflow:
+                result = tool.args_validator_func(ctx, **args_dict)
+                if inspect.isawaitable(result):
+                    await result
 
         return args_dict
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -146,6 +147,13 @@ async def call_tool_in_activity(
     tool: ToolsetTool[AgentDepsT],
 ) -> CallToolResult:
     args = tool.args_validator.validate_python(tool_args)
+
+    # Run custom args validator if present
+    if tool.args_validator_func is not None:
+        result = tool.args_validator_func(ctx, **args)
+        if inspect.isawaitable(result):
+            await result
+
     return await wrap_tool_call_result(toolset.call_tool(name, args, ctx, tool))
 
 

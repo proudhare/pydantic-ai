@@ -8912,3 +8912,57 @@ async def test_heartbeating_body_error_wins_over_beat_crash(monkeypatch: pytest.
         async with _heartbeating():
             await asyncio.sleep(0.01)
             raise ValueError('request failed')
+
+
+# --- args_validator with I/O tests ---
+
+
+async def test_args_validator_with_io(client: Client):
+    """Test that args_validator with I/O works in Temporal workflow."""
+    import platform
+
+    # Create an agent with a tool that has an args_validator doing I/O
+    agent = Agent(TestModel(), name='args_validator_agent')
+
+    @agent.tool_plain
+    def greet(name: str) -> str:
+        """Greet someone by name."""
+        return f'Hello, {name}!'
+
+    # Add a custom validator that does I/O (platform.uname())
+    def validate_greeting_args(ctx: RunContext[None], name: str) -> None:
+        # This I/O would fail in workflow context
+        _ = platform.uname()
+        if not name:
+            from pydantic_ai.exceptions import ModelRetry
+            raise ModelRetry('Name cannot be empty')
+
+    # Get the tool and set its validator
+    toolset = agent.function_toolset
+    tools = await toolset.get_tools(RunContext())
+    greet_tool = tools['greet']
+    greet_tool.args_validator_func = validate_greeting_args
+
+    temporal_agent = TemporalAgent(agent)
+
+    @workflow.defn
+    class ArgsValidatorWorkflow:
+        @workflow.run
+        async def run(self, prompt: str) -> str:
+            result = await temporal_agent.run(prompt)
+            return result.output
+
+    async with Worker(
+        client,
+        task_queue=TASK_QUEUE,
+        workflows=[ArgsValidatorWorkflow],
+        plugins=[AgentPlugin(temporal_agent)],
+    ):
+        result = await client.execute_workflow(
+            ArgsValidatorWorkflow.run,
+            args=['Greet Alice'],
+            id=f'args_validator_test_{uuid.uuid4()}',
+            task_queue=TASK_QUEUE,
+        )
+
+    assert 'Hello, Alice' in result
