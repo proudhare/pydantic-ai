@@ -100,8 +100,9 @@ def reject_unsupported_runtime_toolsets(
             else ''
         )
         raise UserError(
-            f'{labels} cannot be passed to `run(toolsets=...)` at runtime with {engine}, because toolsets '
-            'that execute their own tools or resolve dynamically must be registered for durable execution '
-            'when the agent is constructed. Pass them to the agent constructor instead. Non-executing '
-            f'toolsets like `ExternalToolset` can be passed at runtime.{opt_out}'
+            f'{labels} cannot be added at runtime with {engine} (via `run(toolsets=...)` or '
+            '`override(tools=...)` inside a flow/workflow), because toolsets that execute their own tools '
+            'or resolve dynamically must be registered for durable execution when the agent is constructed. '
+            'Pass them to the agent constructor instead. Non-executing toolsets like `ExternalToolset` '
+            f'can be passed at runtime.{opt_out}'
         )

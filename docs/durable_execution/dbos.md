@@ -217,6 +217,9 @@ You can customize DBOS step behavior, such as retries, by passing [`StepConfig`]
 
 For custom tools, you can annotate them directly with [`@DBOS.step`](https://docs.dbos.dev/python/reference/decorators#step) or [`@DBOS.workflow`](https://docs.dbos.dev/python/reference/decorators#workflow) decorators as needed. These decorators have no effect outside DBOS workflows, so tools remain usable in non-DBOS agents.
 
+!!! note "Non-retryable exceptions"
+    DBOS does not support selective non-retryable exception handling. Framework misconfiguration errors like `UserError` and `PydanticUserError` will be retried according to the configured step retry policy, unlike Temporal and Prefect which mark these as non-retryable by default. If you enable step retries, keep this behavior difference in mind when porting agents across durable execution engines.
+
 
 ## Step Retries
 
