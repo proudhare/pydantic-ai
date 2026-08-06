@@ -1164,3 +1164,70 @@ def test_apply_event_preserves_stream_part_indexes():
     assert replay_manager.get_parts() == snapshot(
         [TextPart(content='hello world'), TextPart(content='goodbye everyone')]
     )
+
+
+def test_thinking_delta_preserves_id():
+    """Regression test for issue #7185: ensure thinking part id is preserved across streaming deltas."""
+    manager = ModelResponsePartsManager(model_request_parameters=ModelRequestParameters())
+
+    # First delta creates a new thinking part with an id
+    event = next(
+        manager.handle_thinking_delta(
+            vendor_part_id='reasoning',
+            content='Initial thought',
+            id='rs_abc123',
+            signature='encrypted_signature',
+            provider_name='openrouter',
+            provider_details={'type': 'reasoning.encrypted'},
+        )
+    )
+    assert isinstance(event, PartStartEvent)
+    assert event.part.id == 'rs_abc123'
+
+    # Subsequent deltas should preserve the id
+    event = next(manager.handle_thinking_delta(vendor_part_id='reasoning', content=' continuation'))
+    assert isinstance(event, PartDeltaEvent)
+
+    # Verify the id is still present in the final part
+    parts = manager.get_parts()
+    assert len(parts) == 1
+    thinking_part = parts[0]
+    assert isinstance(thinking_part, ThinkingPart)
+    assert thinking_part.id == 'rs_abc123'
+    assert thinking_part.content == 'Initial thought continuation'
+    assert thinking_part.signature == 'encrypted_signature'
+    assert thinking_part.provider_name == 'openrouter'
+
+
+def test_thinking_delta_updates_id():
+    """Ensure that if a delta provides a new id, it updates the existing part."""
+    manager = ModelResponsePartsManager(model_request_parameters=ModelRequestParameters())
+
+    # First delta creates a thinking part without an id
+    event = next(
+        manager.handle_thinking_delta(
+            vendor_part_id='reasoning',
+            content='Initial thought',
+            provider_name='openrouter',
+        )
+    )
+    assert isinstance(event, PartStartEvent)
+    assert event.part.id is None
+
+    # Second delta provides an id (e.g., id arrives in a later chunk)
+    event = next(
+        manager.handle_thinking_delta(
+            vendor_part_id='reasoning',
+            content=' more',
+            id='rs_def456',
+        )
+    )
+    assert isinstance(event, PartDeltaEvent)
+
+    # Verify the id is now set
+    parts = manager.get_parts()
+    assert len(parts) == 1
+    thinking_part = parts[0]
+    assert isinstance(thinking_part, ThinkingPart)
+    assert thinking_part.id == 'rs_def456'
+    assert thinking_part.content == 'Initial thought more'

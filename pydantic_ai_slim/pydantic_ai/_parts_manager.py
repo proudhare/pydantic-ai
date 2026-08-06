@@ -320,7 +320,7 @@ class ModelResponsePartsManager:
             existing_thinking_part, part_index = existing_thinking_part_and_index
 
             # Skip if nothing to update
-            if content is None and signature is None and provider_name is None and provider_details is None:
+            if content is None and signature is None and provider_name is None and provider_details is None and id is None:
                 return
 
             part_delta = ThinkingPartDelta(
@@ -334,6 +334,7 @@ class ModelResponsePartsManager:
                 or part_delta.provider_name is not None
                 or provider_details is not None
                 or existing_thinking_part.provider_details == {}
+                or id is not None
             )
             if apply_metadata and callable(provider_details):
                 buffer = self._string_buffers.get(part_index)
@@ -350,6 +351,9 @@ class ModelResponsePartsManager:
                 updated_part = self._apply_metadata_or_copy_provider_details(
                     existing_thinking_part, part_delta, apply_metadata=apply_metadata
                 )
+            # Update id if provided in the delta
+            if id is not None and updated_part.id != id:
+                updated_part = replace(updated_part, id=id)
             if content:
                 self._buffer_string_delta(part_index, updated_part.content, content)
             self._parts[part_index] = updated_part
