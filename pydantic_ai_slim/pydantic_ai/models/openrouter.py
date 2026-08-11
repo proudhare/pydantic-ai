@@ -642,13 +642,6 @@ def _openrouter_settings_to_openai_settings(
     # by OpenRouterModel._map_messages and ._get_tool_choice via the model_settings dict, not passed
     # to the OpenAI SDK.
 
-    for native_tool in model_request_parameters.native_tools:
-        if isinstance(native_tool, WebSearchTool):
-            # Rebuild rather than append: `dict(...)` above is shallow, so an `extra_body['plugins']`
-            # the caller passed in is still their list object.
-            extra_body['plugins'] = [*extra_body.get('plugins', []), {'id': 'web'}]
-            extra_body['web_search_options'] = {'search_context_size': native_tool.search_context_size}
-
     model_settings['extra_body'] = extra_body
 
     return OpenAIChatModelSettings(**model_settings)  # type: ignore[reportCallIssue]
@@ -962,6 +955,18 @@ class OpenRouterModel(OpenAIChatModel):
                 **({'max_completion_tokens': advisor.max_tokens} if advisor.max_tokens is not None else {}),
             }
             tools.append(cast(chat.ChatCompletionToolParam, {'type': 'openrouter:advisor', 'parameters': parameters}))
+
+        # Add web search as a server tool instead of using the deprecated plugin API
+        web_search = next((t for t in model_request_parameters.native_tools if isinstance(t, WebSearchTool)), None)
+        if web_search is not None:
+            parameters: dict[str, Any] = {
+                'search_context_size': web_search.search_context_size,
+            }
+            if web_search.max_uses is not None:
+                parameters['max_uses'] = web_search.max_uses
+            if web_search.allowed_domains is not None:
+                parameters['allowed_domains'] = web_search.allowed_domains
+            tools.append(cast(chat.ChatCompletionToolParam, {'type': 'openrouter:web_search', 'parameters': parameters}))
 
         return tools, tool_choice
 

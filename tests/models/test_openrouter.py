@@ -1072,8 +1072,32 @@ async def test_openrouter_supported_native_tools() -> None:
     assert WebSearchTool in supported
 
 
+async def test_openrouter_web_search_tool_mapping(allow_model_requests: None) -> None:
+    """WebSearchTool maps to an openrouter:web_search server-tool entry in the request tools array.
+
+    Unit test with a mocked client to verify the tool payload is mapped correctly.
+    """
+    mock_client = MockOpenAI.create_mock(_openrouter_completion('done'))
+    model = OpenRouterModel('openai/gpt-4.1', provider=OpenRouterProvider(openai_client=mock_client))
+    agent = Agent(
+        model,
+        capabilities=[NativeTool(WebSearchTool(search_context_size='high', max_uses=5, allowed_domains=['example.com']))],
+    )
+
+    result = await agent.run('hello')
+
+    assert result.output == 'done'
+    kwargs = get_mock_chat_completion_kwargs(mock_client)[0]
+    assert kwargs['tools'] == [
+        {
+            'type': 'openrouter:web_search',
+            'parameters': {'search_context_size': 'high', 'max_uses': 5, 'allowed_domains': ['example.com']},
+        }
+    ]
+
+
 async def test_openrouter_web_search_prepare_request(openrouter_api_key: str) -> None:
-    """Test that prepare_request injects web search plugins when WebSearchTool is present."""
+    """Test that prepare_request adds web search as a server tool when WebSearchTool is present."""
 
     provider = OpenRouterProvider(api_key=openrouter_api_key)
     model = OpenRouterModel('openai/gpt-4.1', provider=provider)
@@ -1086,10 +1110,9 @@ async def test_openrouter_web_search_prepare_request(openrouter_api_key: str) ->
 
     assert new_settings is not None
     extra_body = cast(dict[str, Any], new_settings.get('extra_body', {}))
-    assert 'plugins' in extra_body
-    assert extra_body['plugins'] == [{'id': 'web'}]
-    assert 'web_search_options' in extra_body
-    assert extra_body['web_search_options'] == {'search_context_size': 'high'}
+    # WebSearchTool should no longer add plugins to extra_body
+    assert 'plugins' not in extra_body
+    assert 'web_search_options' not in extra_body
 
 
 async def test_openrouter_no_web_search_without_tool(openrouter_api_key: str) -> None:
@@ -1118,17 +1141,16 @@ async def test_openrouter_settings_to_openai_settings_with_web_search() -> None:
     result = _openrouter_settings_to_openai_settings(settings, model_request_parameters)
 
     extra_body = cast(dict[str, Any], result.get('extra_body', {}))
-    assert 'plugins' in extra_body
-    assert extra_body['plugins'] == [{'id': 'web'}]
-    assert 'web_search_options' in extra_body
-    assert extra_body['web_search_options'] == {'search_context_size': 'high'}
+    # WebSearchTool should no longer add plugins to extra_body
+    assert 'plugins' not in extra_body
+    assert 'web_search_options' not in extra_body
 
 
 async def test_openrouter_prepare_request_does_not_mutate_caller_settings() -> None:
-    """Repeated `prepare_request` calls must not mutate the caller's settings or duplicate plugins.
+    """Repeated `prepare_request` calls must not mutate the caller's settings.
 
     `merge_model_settings` can return the model's own `settings` by identity, so the converter's
-    `openrouter_` pops and `extra_body`/`plugins` appends would otherwise leak back onto the
+    `openrouter_` pops and `extra_body` mutations would otherwise leak back onto the
     caller's object across calls. This is an API-free preparation-path test (no provider request),
     so it is a unit test rather than a VCR test despite the module-level `vcr` mark.
     """
@@ -1153,10 +1175,9 @@ async def test_openrouter_prepare_request_does_not_mutate_caller_settings() -> N
 
     first_extra_body = cast(dict[str, Any], first.get('extra_body', {}))
     second_extra_body = cast(dict[str, Any], second.get('extra_body', {}))
-    # Each prepared request appends exactly one web plugin beside the caller's own (no duplication),
-    # and the caller's `plugins` list itself is never appended to (covered by `settings == original`).
-    assert first_extra_body['plugins'] == [{'id': 'custom'}, {'id': 'web'}]
-    assert second_extra_body['plugins'] == [{'id': 'custom'}, {'id': 'web'}]
+    # The caller's pre-existing plugins are preserved (WebSearchTool no longer adds to plugins).
+    assert first_extra_body['plugins'] == [{'id': 'custom'}]
+    assert second_extra_body['plugins'] == [{'id': 'custom'}]
     # openrouter_* values are moved into extra_body without stripping the caller's originals.
     assert first_extra_body['models'] == ['vendor/model']
     assert first_extra_body['provider'] == {'only': ['provider']}
@@ -1544,9 +1565,9 @@ async def test_openrouter_prepare_request_loop_with_non_websearch_first(openrout
 
     assert new_settings is not None
     extra_body = cast(dict[str, Any], new_settings.get('extra_body', {}))
-    assert 'plugins' in extra_body
-    assert extra_body['plugins'] == [{'id': 'web'}]
-    assert extra_body['web_search_options'] == {'search_context_size': 'medium'}
+    # WebSearchTool should no longer add plugins to extra_body
+    assert 'plugins' not in extra_body
+    assert 'web_search_options' not in extra_body
 
 
 def test_openrouter_nested_provider_response() -> None:
