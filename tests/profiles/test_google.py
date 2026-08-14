@@ -219,3 +219,20 @@ def test_model_profile_image_model():
     assert profile.get('supports_image_output', False) is True
     assert profile.get('supports_json_schema_output', False) is False
     assert profile.get('supports_tools', True) is False
+
+
+def test_model_profile_minimal_thinking_support():
+    """Models without MINIMAL thinking level support should be correctly flagged."""
+    # Models that don't support MINIMAL
+    for model_name in ['gemini-3.7-flash', 'gemini-3-pro-preview', 'gemini-3.1-pro-preview']:
+        profile = google_model_profile(model_name)
+        assert profile is not None
+        assert profile.get('google_supports_thinking_level', False) is True
+        assert profile.get('google_supports_minimal_thinking', True) is False
+
+    # Models that do support MINIMAL (default behavior for Gemini 3+)
+    for model_name in ['gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3-flash-preview']:
+        profile = google_model_profile(model_name)
+        assert profile is not None
+        assert profile.get('google_supports_thinking_level', False) is True
+        assert profile.get('google_supports_minimal_thinking', True) is True

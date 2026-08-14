@@ -131,6 +131,14 @@ class GoogleModelProfile(ModelProfile, total=False):
     Gemini 3+ models use `thinking_level`; Gemini 2.5 uses `thinking_budget`.
     """
 
+    google_supports_minimal_thinking: bool
+    """Whether the model supports the `MINIMAL` thinking level. Default: `True`.
+
+    Most Gemini 3+ models support `MINIMAL`, but gemini-3.7-flash, gemini-3-pro-preview,
+    and gemini-3.1-pro-preview only support `LOW` as their minimum thinking level.
+    When `False`, generic `thinking='minimal'` maps to `thinking_level='LOW'`.
+    """
+
     google_supports_strict_tool_definition: bool
     """Whether the model supports Gemini's `VALIDATED` function-calling mode. Default: `False`.
 
@@ -158,6 +166,9 @@ def google_model_profile(model_name: str) -> ModelProfile | None:
     # Pro models have always-on thinking: Gemini 2.5 Pro rejects budget=0, Gemini 3+ Pro rejects MINIMAL
     is_pro = 'pro' in model_name and 'flash' not in model_name
     thinking_always_enabled = is_thinking_model and is_pro
+    # Some Gemini 3 models don't support MINIMAL thinking level; only LOW and above
+    models_without_minimal = {'gemini-3.7-flash', 'gemini-3-pro-preview', 'gemini-3.1-pro-preview'}
+    supports_minimal_thinking = model_name not in models_without_minimal
     return GoogleModelProfile(
         json_schema_transformer=GoogleJsonSchemaTransformer,
         supports_image_output=is_image_model,
@@ -171,6 +182,7 @@ def google_model_profile(model_name: str) -> ModelProfile | None:
         google_supports_server_side_tool_invocations=is_3_or_newer,
         google_supported_mime_types_in_tool_returns=_GOOGLE_NATIVE_TOOL_RETURN_MIME_TYPES if is_3_or_newer else (),
         google_supports_thinking_level=is_3_or_newer,
+        google_supports_minimal_thinking=supports_minimal_thinking,
         google_supports_strict_tool_definition=supports_strict_tool_definition,
     )
 

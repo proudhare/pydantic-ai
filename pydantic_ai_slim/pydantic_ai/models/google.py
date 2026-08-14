@@ -429,10 +429,18 @@ def _google_cloud_service_tier_headers(service_tier: GoogleCloudServiceTier) -> 
     assert_never(service_tier)  # pragma: no cover
 
 
-def _thinking_effort_to_level(thinking: ThinkingEffort) -> Literal['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']:
-    """Normalize unified thinking effort to a Gemini thinking level."""
+def _thinking_effort_to_level(
+    thinking: ThinkingEffort, *, supports_minimal: bool = True
+) -> Literal['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']:
+    """Normalize unified thinking effort to a Gemini thinking level.
+
+    Args:
+        thinking: The unified thinking effort level.
+        supports_minimal: Whether the model supports the MINIMAL thinking level.
+            If False, 'minimal' maps to 'LOW' instead.
+    """
     level_by_effort: dict[ThinkingEffort, Literal['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']] = {
-        'minimal': 'MINIMAL',
+        'minimal': 'LOW' if not supports_minimal else 'MINIMAL',
         'low': 'LOW',
         'medium': 'MEDIUM',
         'high': 'HIGH',
@@ -851,15 +859,19 @@ class GoogleModel(Model[Client]):
         if thinking is None:
             return None
         profile = self.profile
+        supports_minimal = profile.get('google_supports_minimal_thinking', True)
         if thinking is False:
             if profile.get('google_supports_thinking_level', False):
-                return ThinkingConfigDict(thinking_level=cast(Any, 'MINIMAL'))
+                # Map False to MINIMAL or LOW depending on model support
+                level = 'LOW' if not supports_minimal else 'MINIMAL'
+                return ThinkingConfigDict(thinking_level=cast(Any, level))
             return ThinkingConfigDict(thinking_budget=0)
         if profile.get('google_supports_thinking_level', False):
             if thinking is True:
                 return ThinkingConfigDict(include_thoughts=True)
             return ThinkingConfigDict(
-                include_thoughts=True, thinking_level=cast(Any, _thinking_effort_to_level(thinking))
+                include_thoughts=True,
+                thinking_level=cast(Any, _thinking_effort_to_level(thinking, supports_minimal=supports_minimal)),
             )
         else:
             if thinking is True:

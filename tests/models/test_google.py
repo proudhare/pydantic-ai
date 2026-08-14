@@ -7340,3 +7340,84 @@ async def test_google_model_armor_config_is_sent_in_request(
 
     _, kwargs = mock_generate.call_args
     assert kwargs['config']['model_armor_config'] == _MODEL_ARMOR_CONFIG
+
+
+def test_thinking_effort_to_level_without_minimal_support():
+    """Test that _thinking_effort_to_level maps 'minimal' to 'LOW' when MINIMAL is not supported."""
+    from pydantic_ai.models.google import _thinking_effort_to_level
+
+    # With MINIMAL support (default)
+    assert _thinking_effort_to_level('minimal', supports_minimal=True) == 'MINIMAL'
+    assert _thinking_effort_to_level('low', supports_minimal=True) == 'LOW'
+
+    # Without MINIMAL support (gemini-3.7-flash, gemini-3-pro-preview, gemini-3.1-pro-preview)
+    assert _thinking_effort_to_level('minimal', supports_minimal=False) == 'LOW'
+    assert _thinking_effort_to_level('low', supports_minimal=False) == 'LOW'
+    assert _thinking_effort_to_level('medium', supports_minimal=False) == 'MEDIUM'
+
+
+async def test_translate_thinking_minimal_not_supported(google_provider: GoogleProvider, mocker: MockerFixture):
+    """Test that models without MINIMAL support map thinking='minimal' to thinking_level='LOW'."""
+    from pydantic_ai import Agent
+    from pydantic_ai.models.google import GoogleModel
+
+    # Test with gemini-3.7-flash which doesn't support MINIMAL
+    model = GoogleModel(model_name='gemini-3.7-flash', provider=google_provider)
+
+    response = GenerateContentResponse(
+        candidates=[
+            Candidate(
+                content=Content(parts=[Part(text='OK')], role='model'),
+                finish_reason=GoogleFinishReason.STOP,
+            )
+        ],
+        usage_metadata=GenerateContentResponseUsageMetadata(prompt_token_count=1, candidates_token_count=1),
+        response_id='1',
+        model_version='gemini-3.7-flash',
+    )
+    mock_generate = mocker.patch.object(
+        model.client.aio.models,
+        'generate_content',
+        new_callable=mocker.AsyncMock,
+        return_value=response,
+    )
+
+    agent = Agent(model=model, model_settings={'thinking': 'minimal'})
+    await agent.run('Reply with OK.')
+
+    _, kwargs = mock_generate.call_args
+    # Should map to LOW instead of MINIMAL
+    assert kwargs['config']['thinking_config'] == {'include_thoughts': True, 'thinking_level': 'LOW'}
+
+
+async def test_translate_thinking_false_without_minimal_support(google_provider: GoogleProvider, mocker: MockerFixture):
+    """Test that thinking=False maps to LOW for models without MINIMAL support."""
+    from pydantic_ai import Agent
+    from pydantic_ai.models.google import GoogleModel
+
+    model = GoogleModel(model_name='gemini-3.7-flash', provider=google_provider)
+
+    response = GenerateContentResponse(
+        candidates=[
+            Candidate(
+                content=Content(parts=[Part(text='OK')], role='model'),
+                finish_reason=GoogleFinishReason.STOP,
+            )
+        ],
+        usage_metadata=GenerateContentResponseUsageMetadata(prompt_token_count=1, candidates_token_count=1),
+        response_id='1',
+        model_version='gemini-3.7-flash',
+    )
+    mock_generate = mocker.patch.object(
+        model.client.aio.models,
+        'generate_content',
+        new_callable=mocker.AsyncMock,
+        return_value=response,
+    )
+
+    agent = Agent(model=model, model_settings={'thinking': False})
+    await agent.run('Reply with OK.')
+
+    _, kwargs = mock_generate.call_args
+    # Should map to LOW instead of MINIMAL for gemini-3.7-flash
+    assert kwargs['config']['thinking_config'] == {'thinking_level': 'LOW'}
