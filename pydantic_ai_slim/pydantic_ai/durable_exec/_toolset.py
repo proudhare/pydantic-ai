@@ -126,16 +126,7 @@ class _ToolFailed:
     kind: Literal['tool_failed'] = 'tool_failed'
 
 
-def _result_discriminator(value: Any) -> str:
-    if isinstance(value, ToolReturn) or (is_str_dict(value) and value.get('kind') == 'tool-return'):
-        return 'tool-return'
-    return 'content'
-
-
-_ToolReturnResult = Annotated[
-    Annotated[ToolReturn, Tag('tool-return')] | Annotated[ToolReturnContent, Tag('content')],
-    Discriminator(_result_discriminator),
-]
+_ToolReturnResult: TypeAlias = ToolReturn | ToolReturnContent
 
 
 @dataclass
