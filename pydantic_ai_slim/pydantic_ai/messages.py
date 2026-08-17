@@ -2460,6 +2460,30 @@ def _model_request_part_discriminator(v: Any) -> str | None:
     return getattr(v, 'part_kind', None)
 
 
+def _narrow_request_part_validator(v: Any, handler: pydantic.ValidatorFunctionWrapHandler) -> Any:
+    """Wrap validator that applies narrow_type recovery logic on JSON deserialization failures.
+
+    When a typed subclass like ToolSearchReturnPart would fail strict schema validation during
+    JSON deserialization, this validator catches the error and applies the same fallback logic
+    used in the Python construction path: strip tool_kind and retry with the base part. This
+    ensures JSON round-trips match Python round-trips.
+    """
+    if isinstance(v, dict):
+        kind = v.get('part_kind')
+        tool_kind = v.get('tool_kind')
+        # Only intervene on dicts that would be routed to a typed subclass
+        if isinstance(kind, str) and isinstance(tool_kind, str):
+            if _TYPED_PART_TAGS.get((kind, tool_kind)) is not None:
+                try:
+                    return handler(v)
+                except pydantic.ValidationError:
+                    # Validation failed on typed subclass; strip tool_kind and retry with base part
+                    v_copy = v.copy()
+                    v_copy['tool_kind'] = None
+                    return handler(v_copy)
+    return handler(v)
+
+
 ModelRequestPart = Annotated[
     Annotated[SystemPromptPart, pydantic.Tag('system-prompt')]
     | Annotated[UserPromptPart, pydantic.Tag('user-prompt')]
@@ -2470,6 +2494,7 @@ ModelRequestPart = Annotated[
     | Annotated[RetryPromptPart, pydantic.Tag('retry-prompt')]
     | Annotated[ToolAvailabilityDeltaPart, pydantic.Tag('tool-availability-delta')],
     pydantic.Discriminator(_model_request_part_discriminator),
+    pydantic.WrapValidator(_narrow_request_part_validator),
 ]
 """A message part sent by Pydantic AI to a model."""
 
@@ -2501,6 +2526,30 @@ def _model_response_part_discriminator(v: Any) -> str | None:
     return getattr(v, 'part_kind', None)
 
 
+def _narrow_response_part_validator(v: Any, handler: pydantic.ValidatorFunctionWrapHandler) -> Any:
+    """Wrap validator that applies narrow_type recovery logic on JSON deserialization failures.
+
+    When a typed subclass like NativeToolSearchReturnPart would fail strict schema validation
+    during JSON deserialization, this validator catches the error and applies the same fallback
+    logic used in the Python construction path: strip tool_kind and retry with the base part.
+    This ensures JSON round-trips match Python round-trips.
+    """
+    if isinstance(v, dict):
+        kind = v.get('part_kind')
+        tool_kind = v.get('tool_kind')
+        # Only intervene on dicts that would be routed to a typed subclass
+        if isinstance(kind, str) and isinstance(tool_kind, str):
+            if _TYPED_PART_TAGS.get((kind, tool_kind)) is not None:
+                try:
+                    return handler(v)
+                except pydantic.ValidationError:
+                    # Validation failed on typed subclass; strip tool_kind and retry with base part
+                    v_copy = v.copy()
+                    v_copy['tool_kind'] = None
+                    return handler(v_copy)
+    return handler(v)
+
+
 ModelResponsePart = Annotated[
     Annotated[TextPart, pydantic.Tag('text')]
     | Annotated[ToolSearchCallPart, pydantic.Tag('tool-search-call')]
@@ -2515,6 +2564,7 @@ ModelResponsePart = Annotated[
     | Annotated[FilePart, pydantic.Tag('file')]
     | Annotated[SpeechPart, pydantic.Tag('speech')],
     pydantic.Discriminator(_model_response_part_discriminator),
+    pydantic.WrapValidator(_narrow_response_part_validator),
 ]
 """A message part returned by a model."""
 

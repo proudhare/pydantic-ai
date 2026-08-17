@@ -2843,3 +2843,46 @@ def test_post_compaction_window_accepts_a_minimal_sequence():
     assert len(window) == 2
     assert isinstance(window[0], ModelResponse)
     assert isinstance(window[1], ModelRequest)
+
+
+def test_tool_search_return_json_roundtrip():
+    """Test that NativeToolReturnPart with tool_kind='tool-search' and non-typed content survives JSON round-trip.
+    
+    Regression test for issue #7211: JSON deserialization should fall back to base part
+    (stripping tool_kind) when content doesn't match the typed subclass schema, matching
+    the Python narrow_type() behavior.
+    """
+    adapter = ModelMessagesTypeAdapter()
+    
+    # Test cases: content that doesn't match ToolSearchReturnContent schema
+    test_cases = [
+        'error: provider returned a string',
+        42,
+        [1, 2, 3],
+        None,
+        True,
+        {'foo': 'bar'},  # dict missing required 'discovered_tools' key
+    ]
+    
+    for content in test_cases:
+        # Create a part with tool_kind='tool-search' but non-conforming content
+        part = NativeToolReturnPart(
+            tool_name='search_web',
+            tool_call_id='test-123',
+            content=content,
+            tool_kind='tool-search',
+        )
+        
+        messages = [ModelResponse(parts=[part], timestamp='2024-01-01T00:00:00Z')]
+        
+        # Dump to JSON
+        json_bytes = adapter.dump_json(messages)
+        
+        # Validate back from JSON - should NOT raise ValidationError
+        roundtripped = adapter.validate_json(json_bytes)
+        
+        # After round-trip, tool_kind should be stripped (fell back to base part)
+        roundtripped_part = roundtripped[0].parts[0]
+        assert isinstance(roundtripped_part, NativeToolReturnPart)
+        assert roundtripped_part.tool_kind is None, f"Expected tool_kind=None after round-trip, got {roundtripped_part.tool_kind}"
+        assert roundtripped_part.content == content
