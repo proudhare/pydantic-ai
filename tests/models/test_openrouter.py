@@ -2188,3 +2188,67 @@ async def test_eager_input_streaming_sent_to_openrouter(
     assert ('eager_input_streaming' in tool_param) is expected_eager_key
     if expected_eager_key:
         assert tool_param['eager_input_streaming'] is True
+
+
+@pytest.mark.skipif(not imports_successful, reason='openai not installed')
+async def test_cache_point_at_start_of_later_user_prompt_part() -> None:
+    """Test that a CachePoint at the start of a later UserPromptPart can attach to prior user content."""
+    from pydantic_ai import CachePoint
+    from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterProvider
+
+    model = OpenRouterModel(
+        'anthropic/claude-sonnet-4-6',
+        provider=OpenRouterProvider(api_key='test'),
+    )
+    request = ModelRequest(
+        parts=[
+            UserPromptPart('Hello'),
+            UserPromptPart([CachePoint(ttl='5m'), 'reminder']),
+        ]
+    )
+
+    messages = []
+    async for msg in model._map_user_message(request):
+        messages.append(msg)
+
+    # Should have 2 user messages
+    assert len(messages) == 2
+    assert messages[0]['role'] == 'user'
+    assert messages[1]['role'] == 'user'
+
+    # The cache_control should be attached to the first message's content
+    first_content = messages[0]['content']
+    assert isinstance(first_content, list)
+    assert len(first_content) == 1
+    assert first_content[0]['type'] == 'text'
+    assert first_content[0]['text'] == 'Hello'
+    assert 'cache_control' in first_content[0]
+    assert first_content[0]['cache_control'] == {'type': 'ephemeral', 'ttl': '5m'}
+
+    # The second message should have the reminder text
+    second_content = messages[1]['content']
+    assert isinstance(second_content, list)
+    assert len(second_content) == 1
+    assert second_content[0]['type'] == 'text'
+    assert second_content[0]['text'] == 'reminder'
+
+
+@pytest.mark.skipif(not imports_successful, reason='openai not installed')
+async def test_cache_point_at_start_with_no_prior_content_raises() -> None:
+    """Test that a CachePoint at the start with no prior user content still raises UserError."""
+    from pydantic_ai import CachePoint
+    from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterProvider
+
+    model = OpenRouterModel(
+        'anthropic/claude-sonnet-4-6',
+        provider=OpenRouterProvider(api_key='test'),
+    )
+    request = ModelRequest(
+        parts=[
+            UserPromptPart([CachePoint(ttl='5m'), 'first message']),
+        ]
+    )
+
+    with pytest.raises(UserError, match='CachePoint cannot be the first content'):
+        async for _ in model._map_user_message(request):
+            pass

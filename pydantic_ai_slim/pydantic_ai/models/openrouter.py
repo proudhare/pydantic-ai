@@ -1,23 +1,31 @@
 from __future__ import annotations as _annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import AsyncIterable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Annotated, Any, Literal, TypeAlias, cast
+from typing import Annotated, Any, Literal, TypeAlias, assert_never, cast
 
 from pydantic import BaseModel, Discriminator, ValidationError, field_validator
 from typing_extensions import TypedDict, override
 
 from .. import usage
+from .._utils import guard_tool_call_id as _guard_tool_call_id
 from ..exceptions import ModelAPIError, ModelHTTPError, UserError
 from ..messages import (
     BinaryContent,
     CachePoint,
     FinishReason,
     ModelMessage,
+    ModelRequest,
     ModelResponseStreamEvent,
+    RetryPromptPart,
+    SpeechPart,
+    SystemPromptPart,
     ThinkingPart,
+    ToolAvailabilityDeltaPart,
+    ToolReturnPart,
     UserContent,
+    UserPromptPart,
     VideoUrl,
 )
 from ..native_tools import AbstractNativeTool, AdvisorTool, WebSearchTool
@@ -26,7 +34,12 @@ from ..providers import Provider
 from ..providers.openrouter import OpenRouterModelProfile, OpenRouterProvider
 from ..settings import ModelSettings, ThinkingLevel, merge_model_settings
 from ..tools import ToolDefinition
-from . import ModelRequestParameters, download_item
+from . import (
+    ModelRequestParameters,
+    _unconverted_speech_part_error,  # pyright: ignore[reportPrivateUsage]
+    _unsynthesized_tool_availability_delta_error,  # pyright: ignore[reportPrivateUsage]
+    download_item,
+)
 from ._reasoning_details import ReasoningDetail, from_reasoning_detail, into_reasoning_detail
 from ._tool_choice import ResolvedToolChoice
 
@@ -1106,6 +1119,119 @@ class OpenRouterModel(OpenAIChatModel):
     @override
     def _streamed_response_cls(self):
         return OpenRouterStreamedResponse
+
+    @override
+    async def _map_user_message(self, message: ModelRequest) -> AsyncIterable[chat.ChatCompletionMessageParam]:
+        """Map a ModelRequest to OpenAI chat messages, tracking prior user content for CachePoint attachment.
+
+        When a CachePoint appears at the start of a later UserPromptPart, this implementation allows it to
+        attach to the last eligible previously yielded user message instead of raising UserError.
+        """
+        file_content: list[UserContent] = []
+        previously_yielded_messages: list[chat.ChatCompletionMessageParam] = []
+
+        for part in message.parts:
+            if isinstance(part, SystemPromptPart):
+                system_prompt_role = self.profile.get('openai_system_prompt_role', None)
+                if system_prompt_role == 'developer':
+                    msg = chat.ChatCompletionDeveloperMessageParam(role='developer', content=part.content)
+                elif system_prompt_role == 'user':
+                    msg = chat.ChatCompletionUserMessageParam(role='user', content=part.content)
+                else:
+                    msg = chat.ChatCompletionSystemMessageParam(role='system', content=part.content)
+                previously_yielded_messages.append(msg)
+                yield msg
+            elif isinstance(part, UserPromptPart):
+                msg = await self._map_user_prompt_with_fallback(part, previously_yielded_messages)
+                previously_yielded_messages.append(msg)
+                yield msg
+            elif isinstance(part, ToolReturnPart):
+                tool_text, tool_file_content = part.model_response_str_and_user_content()
+                file_content.extend(tool_file_content)
+                msg = chat.ChatCompletionToolMessageParam(
+                    role='tool',
+                    tool_call_id=_guard_tool_call_id(t=part),
+                    content=tool_text,
+                )
+                previously_yielded_messages.append(msg)
+                yield msg
+            elif isinstance(part, RetryPromptPart):
+                if part.tool_name is None:
+                    msg = chat.ChatCompletionUserMessageParam(role='user', content=part.model_response())
+                else:
+                    msg = chat.ChatCompletionToolMessageParam(
+                        role='tool',
+                        tool_call_id=_guard_tool_call_id(t=part),
+                        content=part.model_response(),
+                    )
+                previously_yielded_messages.append(msg)
+                yield msg
+            elif isinstance(part, ToolAvailabilityDeltaPart):  # pragma: no cover
+                raise _unsynthesized_tool_availability_delta_error()
+            elif isinstance(part, SpeechPart):
+                raise _unconverted_speech_part_error()
+            else:
+                assert_never(part)
+        if file_content:
+            msg = await self._map_user_prompt_with_fallback(
+                UserPromptPart(content=file_content), previously_yielded_messages
+            )
+            yield msg
+
+    async def _map_user_prompt_with_fallback(
+        self, part: UserPromptPart, previously_yielded_messages: list[chat.ChatCompletionMessageParam]
+    ) -> chat.ChatCompletionUserMessageParam:
+        """Map a UserPromptPart to a user message, with fallback for leading CachePoint.
+
+        When a CachePoint appears at the start of this part's content, attempt to attach it to
+        the last eligible user message in previously_yielded_messages instead of raising.
+        """
+        content: str | list[ChatCompletionContentPartParam]
+        if isinstance(part.content, str):
+            content = part.content
+        else:
+            content = []
+            for item in part.content:
+                await self._map_user_prompt_content_item_with_fallback(
+                    item, content, previously_yielded_messages
+                )
+        return chat.ChatCompletionUserMessageParam(role='user', content=content)
+
+    async def _map_user_prompt_content_item_with_fallback(
+        self,
+        item: UserContent,
+        content: list[ChatCompletionContentPartParam],
+        previously_yielded_messages: list[chat.ChatCompletionMessageParam],
+    ) -> None:
+        """Map a user content item, allowing CachePoint to attach to prior content when needed."""
+        if isinstance(item, CachePoint):
+            # If content is empty for this part, try to attach to the last previously yielded user message
+            if not content:
+                last_user_message = self._last_user_message(previously_yielded_messages)
+                if last_user_message is not None:
+                    # Attach cache_control to the last eligible user message
+                    # _add_cache_control_to_message handles both string and list content
+                    self._add_cache_control_to_message(last_user_message, ttl=item.ttl)
+                    return
+            # Otherwise proceed with normal attachment to current content
+            self._add_cache_control(content, ttl=item.ttl)
+        else:
+            await super()._map_user_prompt_content_item(item, content)
+
+    def _last_user_message(
+        self, previously_yielded_messages: list[chat.ChatCompletionMessageParam]
+    ) -> chat.ChatCompletionMessageParam | None:
+        """Get the last user message, or None if unavailable.
+
+        Only used to give a leading CachePoint somewhere to land when it appears at the start
+        of a later UserPromptPart. Returns the entire message so cache_control can be attached
+        via _add_cache_control_to_message (which handles both string and list content).
+        """
+        for msg in reversed(previously_yielded_messages):
+            if msg.get('role') == 'user':
+                return msg
+        # No user message found
+        return None
 
     @override
     async def _map_user_prompt_content_item(
