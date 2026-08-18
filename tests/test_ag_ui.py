@@ -7938,3 +7938,60 @@ async def test_tool_availability_delta_stream_matches_dumped_activity_message() 
     # The literal is a frontend-facing wire contract: deriving both sides from the shared constant
     # would let a rename drift silently.
     assert activity.activity_type == 'pydantic_ai_tool_availability_delta'
+
+
+async def test_tool_only_response_emits_text_message_start() -> None:
+    """Tool-only responses must emit TEXT_MESSAGE_START before TOOL_CALL_START.
+
+    Regression test for #7527: when a model response contains only tool calls (no TextPart),
+    TOOL_CALL_START events must reference a parentMessageId that was emitted in the stream.
+    Without a TEXT_MESSAGE_START event, clients cannot reconstruct the assistant message that
+    owns the tool call, breaking history replay.
+    """
+
+    async def stream_tool_only(
+        messages: list[ModelMessage], agent_info: AgentInfo
+    ) -> AsyncIterator[DeltaToolCalls | str]:
+        # First response: tool-only (no text)
+        if len(messages) == 1:
+            yield {0: DeltaToolCall(name='my_tool', json_args='{"arg": "value"}', tool_call_id='call_1')}
+        # Second response: text after tool result
+        else:
+            yield 'final answer'
+
+    agent = Agent(model=FunctionModel(stream_function=stream_tool_only))
+
+    @agent.tool_plain
+    def my_tool(arg: str) -> str:
+        return 'tool result'
+
+    run_input = create_input(UserMessage(id='msg_1', content='test'))
+    events = await run_and_collect_events(agent, run_input)
+
+    # Extract relevant event types and the parent message ID from TOOL_CALL_START
+    event_types = [e['type'] for e in events]
+    tool_call_start = next(e for e in events if e['type'] == 'TOOL_CALL_START')
+    parent_message_id = tool_call_start['parentMessageId']
+
+    # TEXT_MESSAGE_START must be emitted before TOOL_CALL_START
+    text_start_idx = event_types.index('TEXT_MESSAGE_START')
+    tool_start_idx = event_types.index('TOOL_CALL_START')
+    assert text_start_idx < tool_start_idx, 'TEXT_MESSAGE_START must precede TOOL_CALL_START'
+
+    # The parent message ID must match the TEXT_MESSAGE_START message ID
+    text_message_start = events[text_start_idx]
+    assert text_message_start['messageId'] == parent_message_id, (
+        'TOOL_CALL_START.parentMessageId must reference the emitted TEXT_MESSAGE_START'
+    )
+
+    # Verify the expected event sequence for a tool-only response
+    assert event_types[:8] == [
+        'RUN_STARTED',
+        'TEXT_MESSAGE_START',  # This was missing before the fix
+        'TOOL_CALL_START',
+        'TOOL_CALL_ARGS',
+        'TOOL_CALL_END',
+        'TOOL_CALL_RESULT',
+        'TEXT_MESSAGE_START',  # Second message for the final text response
+        'TEXT_MESSAGE_CONTENT',
+    ]
