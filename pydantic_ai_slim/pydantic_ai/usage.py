@@ -368,6 +368,9 @@ class RunUsage(UsageBase):
     details: dict[str, int] = dataclasses.field(default_factory=dict[str, int])
     """Any extra details returned by the model."""
 
+    _has_unpriced_responses: bool = False
+    """Internal flag tracking whether any response in the run lacked pricing data."""
+
     def incr(self, incr_usage: RunUsage | RequestUsage) -> None:
         """Increment the usage in place.
 
@@ -377,6 +380,7 @@ class RunUsage(UsageBase):
         if isinstance(incr_usage, RunUsage):
             self.requests += incr_usage.requests
             self.tool_calls += incr_usage.tool_calls
+            self._has_unpriced_responses = self._has_unpriced_responses or incr_usage._has_unpriced_responses
         _incr_usage_tokens(self, incr_usage)
         _incr_usage_cost(self, incr_usage)
 
@@ -393,6 +397,9 @@ class RunUsage(UsageBase):
 def _incr_usage_cost(slf: RunUsage | RequestUsage, incr_usage: RunUsage | RequestUsage) -> None:
     if incr_usage.cost is not None:
         slf.cost = (slf.cost or 0) + incr_usage.cost
+    elif isinstance(slf, RunUsage):
+        # Track that this run had at least one response without pricing data
+        slf._has_unpriced_responses = True
 
 
 def _incr_usage_tokens(slf: RunUsage | RequestUsage, incr_usage: RunUsage | RequestUsage) -> None:
@@ -526,13 +533,19 @@ class UsageLimits:
             raise UsageLimitExceeded(f'Exceeded the `cost_limit` of {self.cost_limit} (`usage.cost`={usage.cost!r})')
 
     def _warn_if_cost_unavailable(self, usage: RunUsage) -> None:
-        if self.cost_limit is not None and usage.cost is None:
-            warnings.warn(
-                CostNotFoundWarning(
+        if self.cost_limit is not None and (usage.cost is None or usage._has_unpriced_responses):
+            if usage.cost is None:
+                message = (
                     'A `cost_limit` is set but cannot be enforced because no cost was calculated for this run. '
                     'This usually means genai-prices has no pricing data for the model or provider in use.'
                 )
-            )
+            else:
+                message = (
+                    'A `cost_limit` is set but can only be partially enforced because some responses in this run '
+                    'could not be priced. The reported cost excludes unpriced responses. '
+                    'This usually means genai-prices lacks pricing data for one or more models or providers in use.'
+                )
+            warnings.warn(CostNotFoundWarning(message))
 
     def check_tokens(self, usage: RunUsage) -> None:
         """Raises a `UsageLimitExceeded` exception if the usage exceeds any of the token limits."""

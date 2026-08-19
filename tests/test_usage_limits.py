@@ -1390,3 +1390,35 @@ def test_check_before_request_cost_exceeded():
 
 def test_check_before_request_cost_within_limit():
     UsageLimits(cost_limit=Decimal('0.01')).check_before_request(RunUsage(cost=Decimal('0.005')))
+
+
+async def test_check_cost_warns_when_partial_cost_available():
+    """Warn when cost_limit is set and some responses lack pricing (not just all-or-nothing)."""
+    calls = 0
+
+    def model_function(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # First response: priced (makes usage.cost non-None)
+            return ModelResponse(
+                parts=[ToolCallPart(tool_name='ask_delegate', args={}, tool_call_id='call-1')],
+                usage=RequestUsage(input_tokens=1000, output_tokens=100, cost=Decimal('0.0035')),
+            )
+        # Second response: unpriced (cost=None) - should trigger warning
+        return ModelResponse(parts=[TextPart('done')], usage=RequestUsage(input_tokens=200_000, output_tokens=20_000))
+
+    agent = Agent(FunctionModel(model_function))
+
+    @agent.tool_plain
+    def ask_delegate() -> str:
+        return 'delegated'
+
+    with pytest.warns(
+        CostNotFoundWarning, match='can only be partially enforced because some responses.*could not be priced'
+    ):
+        result = await agent.run('go', usage_limits=UsageLimits(cost_limit=Decimal('0.10')))
+
+    # The cost should be the partial sum (only the first response)
+    assert result.usage.cost == Decimal('0.0035')
+    assert result.usage._has_unpriced_responses is True
