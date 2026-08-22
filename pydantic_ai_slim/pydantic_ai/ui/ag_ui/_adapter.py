@@ -78,6 +78,7 @@ try:
     )
 
     from .. import MessagesBuilder, UIAdapter, UIEventStream
+    from .._messages_builder import BuilderCheckpoint
     from ._event_stream import AGUIEventStream
     from ._forward_compat import skip_unknown_tagged_items
     from ._interrupt import (
@@ -183,6 +184,13 @@ class _AGUIFrontendToolset(ExternalToolset[AgentDepsT]):
 def _new_message_id() -> str:
     """Generate a new unique message ID."""
     return str(uuid.uuid4())
+
+
+def _get_message_id(message: ModelMessage | None) -> str:
+    """Get the AG-UI message ID from a ModelMessage's metadata, or generate a new one."""
+    if message and message.metadata and isinstance(message.metadata.get('ag_ui_message_id'), str):
+        return message.metadata['ag_ui_message_id']
+    return _new_message_id()
 
 
 def _user_content_to_input(
@@ -401,7 +409,10 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
         # `ToolCall`/`ToolMessage.encrypted_value` only exists on the installed model from 0.1.11
         # onward; older versions drop the client's claim, so the field is only read when present.
         use_encrypted_value = parse_ag_ui_version(DEFAULT_AG_UI_VERSION) >= ENCRYPTED_VALUE_VERSION
+        # Track checkpoints to associate AG-UI message IDs with the corresponding ModelMessages
+        checkpoints: list[tuple[BuilderCheckpoint, str]] = []
         for msg in messages:
+            checkpoint_before = builder.checkpoint()
             match msg:
                 case UserMessage(content=content):
                     if isinstance(content, str):
@@ -632,9 +643,25 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                         stacklevel=2,
                     )
 
+            # Store checkpoint and AG-UI message ID for later association
+            checkpoints.append((checkpoint_before, msg.id))
+
         # Parts above are built as base `ToolCallPart`/`ToolReturnPart`/`NativeTool*Part` carrying a
         # `tool_kind` claim; promote them to their typed subclasses in one best-effort pass.
-        return narrow_message_parts(builder.messages)
+        narrowed_messages = narrow_message_parts(builder.messages)
+
+        # Associate AG-UI message IDs with the corresponding ModelMessages via metadata
+        for checkpoint, ag_ui_id in checkpoints:
+            # Check both request and response types
+            for of_type in (ModelRequest, ModelResponse):
+                modified = builder.last_modified(checkpoint, of_type=of_type)
+                if modified is not None:
+                    if modified.metadata is None:
+                        modified.metadata = {}
+                    modified.metadata['ag_ui_message_id'] = ag_ui_id
+                    break
+
+        return narrowed_messages
 
     @staticmethod
     def _dump_request_parts(  # noqa: C901
@@ -670,9 +697,9 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                 return
             # Simplify to plain string if only a single text item.
             if len(user_content) == 1 and isinstance(user_content[0], TextInputContent):
-                result.append(UserMessage(id=_new_message_id(), content=user_content[0].text))
+                result.append(UserMessage(id=_get_message_id(msg), content=user_content[0].text))
             else:
-                result.append(UserMessage(id=_new_message_id(), content=user_content))
+                result.append(UserMessage(id=_get_message_id(msg), content=user_content))
             user_content = []
 
         for part in msg.parts:
@@ -698,7 +725,7 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                                 uploaded_content['vendor_metadata'] = item.vendor_metadata
                             result.append(
                                 ActivityMessage(
-                                    id=_new_message_id(),
+                                    id=_get_message_id(msg),
                                     activity_type=UPLOADED_FILE_ACTIVITY_TYPE,
                                     content=uploaded_content,
                                 )
@@ -714,7 +741,7 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                 # since a `ToolMessage` has no outcome slot.
                 result.append(
                     ToolMessage(
-                        id=_new_message_id(),
+                        id=_get_message_id(msg),
                         content=dump_tool_return_content(part.content),
                         tool_call_id=part.tool_call_id,
                         error=part.model_response_str(wrap_if_error=False)
@@ -729,7 +756,7 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                 flush_user_content()
                 result.append(
                     ActivityMessage(
-                        id=_new_message_id(),
+                        id=_get_message_id(msg),
                         activity_type=TOOL_AVAILABILITY_DELTA_ACTIVITY_TYPE,
                         content={
                             'added': part.tools_added,
@@ -742,7 +769,7 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                     flush_user_content()
                     result.append(
                         ToolMessage(
-                            id=_new_message_id(),
+                            id=_get_message_id(msg),
                             content=part.model_response(),
                             tool_call_id=part.tool_call_id,
                             error=part.model_response(),
@@ -757,7 +784,7 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
 
         messages: list[Message] = []
         if system_content:
-            messages.append(SystemMessage(id=_new_message_id(), content='\n'.join(system_content)))
+            messages.append(SystemMessage(id=_get_message_id(msg), content='\n'.join(system_content)))
         flush_user_content()
         messages.extend(result)
         return messages
@@ -792,7 +819,7 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                 return
             result.append(
                 AssistantMessage(
-                    id=_new_message_id(),
+                    id=_get_message_id(msg),
                     content='\n'.join(text_content) if text_content else None,
                     tool_calls=tool_calls_list if tool_calls_list else None,
                 )
@@ -815,7 +842,7 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                     encrypted = thinking_encrypted_metadata(part)
                     result.append(
                         ReasoningMessage(
-                            id=_new_message_id(),
+                            id=_get_message_id(msg),
                             content=part.content,
                             encrypted_value=json.dumps(encrypted) if encrypted else None,
                         )
@@ -841,7 +868,7 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                     # Built-in tool-return files also ride inline in `ToolMessage.content` (see above).
                     tool_messages.append(
                         ToolMessage(
-                            id=_new_message_id(),
+                            id=_get_message_id(msg),
                             content=dump_tool_return_content(builtin_return.content),
                             tool_call_id=prefixed_id,
                             error=builtin_return.model_response_str(wrap_if_error=False)
@@ -875,7 +902,7 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                         file_content['vendor_metadata'] = part.content.vendor_metadata
                     result.append(
                         ActivityMessage(
-                            id=_new_message_id(),
+                            id=_get_message_id(msg),
                             activity_type=FILE_ACTIVITY_TYPE,
                             content=file_content,
                         )
@@ -884,7 +911,7 @@ class AGUIAdapter(UIAdapter[RunAgentInput, Message, BaseEvent, AgentDepsT, Outpu
                 flush()
                 result.append(
                     ActivityMessage(
-                        id=_new_message_id(),
+                        id=_get_message_id(msg),
                         activity_type=COMPACTION_ACTIVITY_TYPE,
                         content=compaction_payload(part),
                     )
