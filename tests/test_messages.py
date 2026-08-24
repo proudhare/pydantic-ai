@@ -2865,3 +2865,40 @@ def test_post_compaction_window_accepts_a_minimal_sequence():
     assert len(window) == 2
     assert isinstance(window[0], ModelResponse)
     assert isinstance(window[1], ModelRequest)
+
+
+def test_instruction_part_serialization_roundtrip():
+    """Test that InstructionPart round-trips correctly through JSON serialization."""
+    # Test static instruction
+    request_static = ModelRequest(parts=[InstructionPart(content='Be helpful.', dynamic=False)])
+    serialized = ModelMessagesTypeAdapter.dump_json([request_static])
+    deserialized = ModelMessagesTypeAdapter.validate_json(serialized)
+    assert len(deserialized) == 1
+    assert isinstance(deserialized[0], ModelRequest)
+    assert len(deserialized[0].parts) == 1
+    assert isinstance(deserialized[0].parts[0], InstructionPart)
+    assert deserialized[0].parts[0].content == 'Be helpful.'
+    assert deserialized[0].parts[0].dynamic is False
+
+    # Test dynamic instruction
+    request_dynamic = ModelRequest(parts=[InstructionPart(content='Dynamic instruction', dynamic=True)])
+    serialized_dyn = ModelMessagesTypeAdapter.dump_json([request_dynamic])
+    deserialized_dyn = ModelMessagesTypeAdapter.validate_json(serialized_dyn)
+    assert len(deserialized_dyn) == 1
+    assert isinstance(deserialized_dyn[0].parts[0], InstructionPart)
+    assert deserialized_dyn[0].parts[0].content == 'Dynamic instruction'
+    assert deserialized_dyn[0].parts[0].dynamic is True
+
+    # Test full history with instruction and response
+    history = [
+        ModelRequest(parts=[InstructionPart(content='Be helpful.', dynamic=False)]),
+        ModelResponse(parts=[TextPart(content='OK')]),
+    ]
+    serialized_history = ModelMessagesTypeAdapter.dump_json(history)
+    deserialized_history = ModelMessagesTypeAdapter.validate_json(serialized_history)
+    assert len(deserialized_history) == 2
+    assert isinstance(deserialized_history[0], ModelRequest)
+    assert isinstance(deserialized_history[0].parts[0], InstructionPart)
+    assert deserialized_history[0].parts[0].content == 'Be helpful.'
+    assert isinstance(deserialized_history[1], ModelResponse)
+    assert isinstance(deserialized_history[1].parts[0], TextPart)
