@@ -399,6 +399,37 @@ def test_opentelemetry_attributes_excludes_first_class_token_details():
     }
 
 
+def test_opentelemetry_attributes_excludes_gemini_duplicate_tokens():
+    """Gemini-specific token fields that duplicate standard metrics must not leak into `details.*`.
+
+    Google's usage API reports modality-specific breakdowns (`text_prompt_tokens`, `text_candidates_tokens`)
+    and reasoning tokens (`thoughts_tokens`) in the details dict. These duplicate the standard `input_tokens`
+    and `output_tokens` values, causing downstream observability platforms like Langfuse to double-count
+    tokens and costs when they sum all numeric fields under `gen_ai.usage.details.*`.
+    """
+    usage = RequestUsage(
+        input_tokens=160,
+        output_tokens=43,
+        details={
+            'text_prompt_tokens': 160,
+            'text_candidates_tokens': 35,
+            'thoughts_tokens': 8,
+            'cached_content_tokens': 50,
+        },
+    )
+    otel_attrs = usage.opentelemetry_attributes()
+    assert otel_attrs == {
+        'gen_ai.usage.input_tokens': 160,
+        'gen_ai.usage.output_tokens': 43,
+        # The Gemini-specific duplicate fields should NOT appear here
+        'gen_ai.usage.details.cached_content_tokens': 50,
+    }
+    # But they're still accessible on the RequestUsage object
+    assert usage.details['text_prompt_tokens'] == 160
+    assert usage.details['text_candidates_tokens'] == 35
+    assert usage.details['thoughts_tokens'] == 8
+
+
 async def test_multi_agent_usage_sync():
     """As in `test_multi_agent_usage_async`, with a sync tool."""
     controller_agent = Agent(TestModel())

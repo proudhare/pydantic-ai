@@ -18,12 +18,23 @@ from .exceptions import UsageLimitExceeded
 
 __all__ = 'RequestUsage', 'RunUsage', 'UsageLimits'
 
-_FIRST_CLASS_TOKEN_DETAIL_KEYS = frozenset({'input_tokens', 'output_tokens'})
+_FIRST_CLASS_TOKEN_DETAIL_KEYS = frozenset({
+    'input_tokens',
+    'output_tokens',
+    'text_prompt_tokens',
+    'text_candidates_tokens',
+    'thoughts_tokens',
+})
 """`details` keys whose names collide with the first-class `gen_ai.usage.{input,output}_tokens`
 attributes. They must never be emitted under `gen_ai.usage.details.*` too: doing so reports the same
 conceptual quantity under two attributes that consumers like Langfuse then sum, double-counting tokens
 and cost. Adapters that stash these keys in `details` (e.g. Anthropic's streaming carry-forward, Cohere's
-billed units) keep them accessible on `RequestUsage.details`; only the ambiguous OTel emission is dropped."""
+billed units) keep them accessible on `RequestUsage.details`; only the ambiguous OTel emission is dropped.
+
+Gemini-specific fields:
+- `text_prompt_tokens`: duplicates `input_tokens` (text modality component)
+- `text_candidates_tokens`: duplicates `output_tokens` (text modality component)
+- `thoughts_tokens`: duplicates `output_reasoning_tokens` (included in `output_tokens`)"""
 
 _LEGACY_USAGE_KEYS = frozenset({'requests', 'request_tokens', 'response_tokens', 'total_tokens'})
 """Keys accepted in stored usage data for backwards compatibility but not preserved as arbitrary fields."""
