@@ -2865,3 +2865,24 @@ def test_post_compaction_window_accepts_a_minimal_sequence():
     assert len(window) == 2
     assert isinstance(window[0], ModelResponse)
     assert isinstance(window[1], ModelRequest)
+
+
+def test_post_compaction_window_empty_content_is_not_a_boundary():
+    """An empty CompactionPart (empty string content) should not act as a boundary.
+
+    Empty summaries can't stand in for the history they're supposed to replace,
+    so the window must include the full history before them.
+    """
+    messages: list[ModelMessage] = [
+        ModelRequest.user_text_prompt('old context'),
+        ModelResponse(parts=[TextPart(content='answer')]),
+        # Empty-content CompactionPart should NOT act as a boundary
+        ModelResponse(parts=[CompactionPart(content='', provider_name='anthropic')]),
+        ModelRequest.user_text_prompt('new request'),
+    ]
+
+    window = post_compaction_window(messages)
+
+    # Should return all messages since empty CompactionPart is not a valid boundary
+    assert len(window) == 4
+    assert window == messages
