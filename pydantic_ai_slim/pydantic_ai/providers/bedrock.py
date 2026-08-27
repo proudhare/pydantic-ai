@@ -497,11 +497,13 @@ def bedrock_nvidia_model_profile(model_name: str) -> ModelProfile | None:
 
 def bedrock_openai_model_profile(model_name: str) -> ModelProfile | None:
     """Get the model profile for an OpenAI model used via Bedrock Converse."""
-    # Only the open-weight GPT-OSS family is served on Converse; every proprietary GPT model (GPT-5.4+
-    # today, and future GPT-6/7/… tomorrow) is Bedrock Mantle-only. Flag those as unsupported so
-    # `BedrockConverseModel` raises an actionable error at construction rather than failing later with an
-    # opaque Converse error.
-    if not model_name.startswith('gpt-oss'):
+    # AWS Bedrock serves both gpt-oss (open-weight) and select proprietary GPT models on Converse.
+    # As of 2026-08, GPT-5.6 models (sol/luna/terra) are supported on Converse alongside gpt-oss.
+    # Earlier proprietary models (GPT-5.4) and future models not yet confirmed by AWS remain Mantle-only.
+    # Flag unsupported models so `BedrockConverseModel` raises an actionable error at construction
+    # rather than failing later with an opaque Converse error.
+    converse_supported = model_name.startswith('gpt-oss') or model_name.startswith('gpt-5.6')
+    if not converse_supported:
         return BedrockModelProfile(bedrock_supported_on_converse=False)
     # TODO(v3): default `bedrock:` to Bedrock Mantle (with a deprecation warning steering users who want
     # Converse to a `bedrock-converse:` prefix), mirroring the OpenAI Responses transition.

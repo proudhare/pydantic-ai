@@ -975,3 +975,31 @@ def test_strict_none_preserves_numeric_constraints():
             'required': ['score'],
         }
     )
+
+
+def test_bedrock_openai_model_profile(env: TestEnv):
+    """Test that GPT-5.6 models are supported on Converse, while earlier proprietary models are not."""
+    env.set('AWS_DEFAULT_REGION', 'us-east-1')
+    provider = BedrockProvider()
+
+    # gpt-oss models should be supported on Converse
+    gpt_oss_profile = provider.model_profile('openai.gpt-oss-120b-1:0')
+    assert gpt_oss_profile is not None
+    assert gpt_oss_profile.get('bedrock_supported_on_converse', True) is True
+    assert gpt_oss_profile.get('bedrock_thinking_variant') == 'openai'
+    assert gpt_oss_profile.get('supports_thinking', False) is True
+    assert gpt_oss_profile.get('thinking_always_enabled', False) is True
+
+    # GPT-5.6 models should be supported on Converse
+    for model in ('us.openai.gpt-5.6-sol', 'us.openai.gpt-5.6-luna', 'us.openai.gpt-5.6-terra'):
+        gpt56_profile = provider.model_profile(model)
+        assert gpt56_profile is not None
+        assert gpt56_profile.get('bedrock_supported_on_converse', True) is True
+        assert gpt56_profile.get('bedrock_thinking_variant') == 'openai'
+        assert gpt56_profile.get('supports_thinking', False) is True
+        assert gpt56_profile.get('thinking_always_enabled', False) is True
+
+    # Earlier proprietary models (GPT-5.4) should NOT be supported on Converse
+    gpt54_profile = provider.model_profile('openai.gpt-5.4')
+    assert gpt54_profile is not None
+    assert gpt54_profile.get('bedrock_supported_on_converse', True) is False
