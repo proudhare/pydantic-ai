@@ -78,6 +78,8 @@ class ModelResponsePartsManager:
     """Unmaterialized string deltas, keyed by part index."""
     _tool_kind_by_name: dict[str, ToolPartKind] = field(default_factory=dict[str, ToolPartKind], init=False, repr=False)
     """Cached `{tool_name: tool_kind}` built from `function_tools` at construction time."""
+    _thinking_tag_buffer: str = field(default='', init=False, repr=False, compare=False)
+    """Buffer holding trailing text that could be a prefix of a thinking tag, keyed by vendor_part_id."""
 
     def __post_init__(self) -> None:
         self._tool_kind_by_name = {
@@ -130,6 +132,16 @@ class ModelResponsePartsManager:
         Returns:
             A list of ModelResponsePart objects. ToolCallPartDelta objects are excluded.
         """
+        # Flush any buffered thinking tag prefix - it wasn't a tag after all
+        if self._thinking_tag_buffer:
+            # Find the last text part and append the buffer to it
+            for i in range(len(self._parts) - 1, -1, -1):
+                if isinstance(self._parts[i], TextPart):
+                    part = self._parts[i]
+                    self._buffer_string_delta(i, part.content, self._thinking_tag_buffer)
+                    break
+            self._thinking_tag_buffer = ''
+
         for part_index in tuple(self._string_buffers):
             if not isinstance(self._parts[part_index], ToolCallPartDelta):
                 self._materialize_and_cache_part(part_index)
@@ -184,6 +196,11 @@ class ModelResponsePartsManager:
         Raises:
             UnexpectedModelBehavior: If attempting to apply text content to a part that is not a TextPart.
         """
+        # Prepend any buffered text from previous delta
+        if self._thinking_tag_buffer:
+            content = self._thinking_tag_buffer + content
+            self._thinking_tag_buffer = ''
+
         existing_text_part_and_index: tuple[TextPart, int] | None = None
 
         if vendor_part_id is None:
@@ -197,25 +214,113 @@ class ModelResponsePartsManager:
 
                 if thinking_tags and isinstance(existing_part, ThinkingPart):
                     # We may be building a thinking part instead of a text part if we had previously seen a thinking tag
-                    if content == thinking_tags[1]:
-                        # When we see the thinking end tag, we're done with the thinking part and the next text delta will need a new part
+                    # Check if content contains the end tag
+                    end_tag_pos = content.find(thinking_tags[1])
+                    if end_tag_pos >= 0:
+                        # Emit thinking content before the end tag
+                        if end_tag_pos > 0:
+                            yield from self._handle_embedded_thinking_content(
+                                existing_part, part_index, content[:end_tag_pos], provider_name, provider_details
+                            )
+                        # End the thinking part
                         self._handle_embedded_thinking_end(vendor_part_id)
+                        # Process remaining content after the end tag as normal text
+                        remaining = content[end_tag_pos + len(thinking_tags[1]):]
+                        if remaining:
+                            # Recursively handle the remaining content as a new text delta
+                            yield from self.handle_text_delta(
+                                vendor_part_id=vendor_part_id,
+                                content=remaining,
+                                id=id,
+                                provider_name=provider_name,
+                                provider_details=provider_details,
+                                thinking_tags=thinking_tags,
+                                ignore_leading_whitespace=ignore_leading_whitespace,
+                            )
                         return
-                    yield from self._handle_embedded_thinking_content(
-                        existing_part, part_index, content, provider_name, provider_details
-                    )
-                    return
+                    else:
+                        # No end tag found, emit as thinking content
+                        yield from self._handle_embedded_thinking_content(
+                            existing_part, part_index, content, provider_name, provider_details
+                        )
+                        return
                 elif isinstance(existing_part, TextPart):
                     existing_text_part_and_index = existing_part, part_index
                 else:
                     existing_part = self._materialize_and_cache_part(part_index)
                     raise UnexpectedModelBehavior(f'Cannot apply a text delta to {existing_part=}')
 
-        if thinking_tags and content == thinking_tags[0]:
-            # When we see a thinking start tag (which is a single token), we'll build a new thinking part instead
-            yield from self._handle_embedded_thinking_start(vendor_part_id, provider_name, provider_details)
-            return
+        # Check for thinking start tag when thinking_tags is configured
+        if thinking_tags:
+            start_tag_pos = content.find(thinking_tags[0])
+            if start_tag_pos >= 0:
+                # Emit text content before the start tag
+                if start_tag_pos > 0:
+                    yield from self._emit_text_content(
+                        existing_text_part_and_index,
+                        content[:start_tag_pos],
+                        vendor_part_id,
+                        id,
+                        provider_name,
+                        provider_details,
+                        ignore_leading_whitespace,
+                    )
+                # Start a new thinking part
+                yield from self._handle_embedded_thinking_start(vendor_part_id, provider_name, provider_details)
+                # Process remaining content after the start tag
+                remaining = content[start_tag_pos + len(thinking_tags[0]):]
+                if remaining:
+                    # Recursively handle the remaining content
+                    yield from self.handle_text_delta(
+                        vendor_part_id=vendor_part_id,
+                        content=remaining,
+                        id=id,
+                        provider_name=provider_name,
+                        provider_details=provider_details,
+                        thinking_tags=thinking_tags,
+                        ignore_leading_whitespace=False,
+                    )
+                return
 
+            # No complete tag found; check if content ends with a prefix of either tag
+            # Buffer trailing text that could be the start of a tag
+            to_emit = content
+            for tag in thinking_tags:
+                for prefix_len in range(1, len(tag)):
+                    if content.endswith(tag[:prefix_len]):
+                        # Hold back this prefix
+                        self._thinking_tag_buffer = content[-prefix_len:]
+                        to_emit = content[:-prefix_len]
+                        break
+                if self._thinking_tag_buffer:
+                    break
+
+            if not to_emit:
+                return
+
+            content = to_emit
+
+        yield from self._emit_text_content(
+            existing_text_part_and_index,
+            content,
+            vendor_part_id,
+            id,
+            provider_name,
+            provider_details,
+            ignore_leading_whitespace,
+        )
+
+    def _emit_text_content(
+        self,
+        existing_text_part_and_index: tuple[TextPart, int] | None,
+        content: str,
+        vendor_part_id: VendorId | None,
+        id: str | None,
+        provider_name: str | None,
+        provider_details: dict[str, Any] | None,
+        ignore_leading_whitespace: bool,
+    ) -> Iterator[ModelResponseStreamEvent]:
+        """Emit text content as a new part or delta on an existing part."""
         if existing_text_part_and_index is None:
             # This is a workaround for models that emit `<think>\n</think>\n\n` or an empty text part ahead of tool calls (e.g. Ollama + Qwen3),
             # which we don't want to end up treating as a final result when using `run_stream` with `str` a valid `output_type`.

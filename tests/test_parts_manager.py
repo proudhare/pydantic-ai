@@ -1164,3 +1164,75 @@ def test_apply_event_preserves_stream_part_indexes():
     assert replay_manager.get_parts() == snapshot(
         [TextPart(content='hello world'), TextPart(content='goodbye everyone')]
     )
+
+
+def test_handle_text_deltas_with_split_thinking_tags():
+    """Test that thinking tags work correctly when split across deltas."""
+    manager = ModelResponsePartsManager(model_request_parameters=ModelRequestParameters())
+    thinking_tags = (' thinking', ' response')
+
+    # Feed deltas that split the ' thinking' tag: ' think' + 'ing'
+    event = next(manager.handle_text_delta(vendor_part_id='content', content=' think', thinking_tags=thinking_tags))
+    assert isinstance(event, PartStartEvent)
+    assert isinstance(event.part, TextPart)
+    # Nothing should be emitted yet - ' think' is buffered as a potential tag prefix
+
+    event = next(manager.handle_text_delta(vendor_part_id='content', content='ing', thinking_tags=thinking_tags))
+    # Now the full ' thinking' tag is recognized, creating a ThinkingPart
+    assert isinstance(event, PartStartEvent)
+    assert isinstance(event.part, ThinkingPart)
+
+    # Add thinking content
+    event = next(
+        manager.handle_text_delta(vendor_part_id='content', content='\nLet me reason.\n', thinking_tags=thinking_tags)
+    )
+    assert isinstance(event, PartDeltaEvent)
+    assert event.delta.content_delta == '\nLet me reason.\n'
+
+    # Feed the ' response' tag split as ' res' + 'ponse'
+    event = next(manager.handle_text_delta(vendor_part_id='content', content=' res', thinking_tags=thinking_tags))
+    # ' res' is buffered as a potential prefix
+    assert isinstance(event, PartDeltaEvent)
+    # Nothing emitted yet for the tag
+
+    events = list(manager.handle_text_delta(vendor_part_id='content', content='ponse', thinking_tags=thinking_tags))
+    # The ' response' tag should now be recognized and the thinking part ended
+    assert events == []
+
+    # Add text after thinking
+    event = next(
+        manager.handle_text_delta(vendor_part_id='content', content='\nThe answer is 42.\n', thinking_tags=thinking_tags)
+    )
+    assert isinstance(event, PartStartEvent)
+    assert isinstance(event.part, TextPart)
+
+    parts = manager.get_parts()
+    assert len(parts) == 2
+    assert isinstance(parts[0], ThinkingPart)
+    assert parts[0].content == '\nLet me reason.\n'
+    assert isinstance(parts[1], TextPart)
+    assert parts[1].content == '\nThe answer is 42.\n'
+
+
+def test_thinking_tag_split_comparison_with_non_streaming():
+    """Verify streaming with split tags produces same result as non-streaming oracle."""
+    from pydantic_ai._thinking_part import split_content_into_text_and_thinking
+
+    thinking_tags = (' thinking', ' response')
+    full_content = 'Before thinking\nReasoning here response\nAfter'
+
+    # Non-streaming oracle
+    oracle_parts = split_content_into_text_and_thinking(full_content, thinking_tags)
+
+    # Streaming with extreme chunking (every character)
+    manager = ModelResponsePartsManager(model_request_parameters=ModelRequestParameters())
+    for char in full_content:
+        list(manager.handle_text_delta(vendor_part_id='content', content=char, thinking_tags=thinking_tags))
+
+    streamed_parts = manager.get_parts()
+
+    # Both should produce the same parts
+    assert len(streamed_parts) == len(oracle_parts)
+    for streamed, oracle in zip(streamed_parts, oracle_parts):
+        assert type(streamed) == type(oracle)
+        assert streamed.content == oracle.content
