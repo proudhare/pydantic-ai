@@ -1,8 +1,8 @@
 """Wire-contract tests for reasoning settings (`thinking` and provider-specific effort).
 
 Each case asserts on the actual request wire body (`vcr.requests[0].body`), NOT on mock
-kwargs or `_translate_thinking` return values. The cassette matcher isn't sensitive to the
-request body, so asserting the body directly is what catches disable-signal regressions on
+kwargs or `_translate_thinking` return values. Body matching is enabled module-wide via
+`additional_matchers=['body']`, so a drifted request body fails cassette matching and pins
 the wire (the methodology that surfaced the OpenRouter `enabled: True` miss).
 """
 
@@ -39,7 +39,7 @@ with try_import() as mistral_imports:
 if TYPE_CHECKING:
     from pydantic_ai.models import Model
 
-pytestmark = [pytest.mark.anyio, pytest.mark.vcr]
+pytestmark = [pytest.mark.anyio, pytest.mark.vcr(additional_matchers=['body'])]
 
 # Per-provider skip mark, keyed by a case's `provider`. A case naming a provider missing from this
 # map fails loudly at collection (KeyError) rather than silently skipping on the wrong SDK's presence.
@@ -68,21 +68,11 @@ class WireCase:
     """Keys that must NOT appear in the request body."""
     expect_warning: str | None = None
     """If set, a `UserWarning` matching this regex must be emitted during the run."""
-    match_body: bool = False
-    """Make the request body part of the cassette match.
-
-    Without it the default matchers ignore the body, so `present`/`absent` assert against the frozen
-    recording and stay green even when the code starts sending something else. With it, a drifted body
-    fails to match its cassette, so the case pins the wire rather than describing it.
-    """
 
     @property
     def marks(self) -> tuple[pytest.MarkDecorator, ...]:
         """Skip mark gating this case on its provider's SDK — derived from `provider`, the single source of truth."""
-        marks = (_PROVIDER_SKIP_MARKS[self.provider],)
-        if self.match_body:
-            marks += (pytest.mark.vcr(additional_matchers=['body']),)
-        return marks
+        return (_PROVIDER_SKIP_MARKS[self.provider],)
 
 
 CASES = [
@@ -240,7 +230,6 @@ CASES = [
         # Gemini 3+ takes `thinking_level` rather than a budget, and 3.8 Flash rejects `MINIMAL`,
         # so the disable signal folds to the lowest level it accepts.
         present={'generationConfig.thinkingConfig.thinking_level': 'LOW'},
-        match_body=True,
     ),
     # Mistral: adjustable-reasoning models take the binary `reasoning_effort` ('high'/'none');
     # always-on magistral must never receive it (https://docs.mistral.ai/capabilities/reasoning/).
