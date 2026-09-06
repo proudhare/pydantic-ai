@@ -63,6 +63,7 @@ class FunctionToolset(AbstractToolset[AgentDepsT]):
     schema_generator: type[GenerateJsonSchema]
     _defer_loading: bool
     include_return_schema: bool | None
+    _get_tools_in_progress: bool
 
     def __init__(
         self,
@@ -137,6 +138,7 @@ class FunctionToolset(AbstractToolset[AgentDepsT]):
         self.metadata = metadata
         self._defer_loading = defer_loading
         self.include_return_schema = include_return_schema
+        self._get_tools_in_progress = False
 
         # A part is kept whole rather than reduced to its text, because it carries the author's
         # declared `name` and its `dynamic` flag -- the flag that decides whether the part falls inside
@@ -597,6 +599,12 @@ class FunctionToolset(AbstractToolset[AgentDepsT]):
         Args:
             tool: The tool to add.
         """
+        if self._get_tools_in_progress:
+            raise UserError(
+                'Cannot register new tools during get_tools() iteration. '
+                'Tool registration from prepare() is not supported. '
+                'Use prepare_tools, DeferredLoadingToolset, or wrapper toolsets for dynamic tool registration.'
+            )
         if tool.name in self.tools:
             raise UserError(f'Tool name conflicts with existing tool: {tool.name!r}')
         if tool.max_retries is None and self.max_retries is not None:
@@ -625,30 +633,34 @@ class FunctionToolset(AbstractToolset[AgentDepsT]):
         return parts or None
 
     async def get_tools(self, ctx: RunContext[AgentDepsT]) -> dict[str, ToolsetTool[AgentDepsT]]:
-        tools: dict[str, ToolsetTool[AgentDepsT]] = {}
-        for original_name, tool in self.tools.items():
-            max_retries = tool.max_retries if tool.max_retries is not None else self.max_retries
-            if max_retries is None:
-                max_retries = ctx.max_retries
-            run_context = replace(
-                ctx,
-                tool_name=original_name,
-                retry=ctx.retries.get(original_name, 0),
-                max_retries=max_retries,
-            )
-            tool_def = await tool.prepare_tool_def(run_context)
-            if not tool_def:
-                continue
+        self._get_tools_in_progress = True
+        try:
+            tools: dict[str, ToolsetTool[AgentDepsT]] = {}
+            for original_name, tool in self.tools.items():
+                max_retries = tool.max_retries if tool.max_retries is not None else self.max_retries
+                if max_retries is None:
+                    max_retries = ctx.max_retries
+                run_context = replace(
+                    ctx,
+                    tool_name=original_name,
+                    retry=ctx.retries.get(original_name, 0),
+                    max_retries=max_retries,
+                )
+                tool_def = await tool.prepare_tool_def(run_context)
+                if not tool_def:
+                    continue
 
-            new_name = tool_def.name
-            if new_name in tools:
-                if new_name != original_name:
-                    raise UserError(f'Renaming tool {original_name!r} to {new_name!r} conflicts with existing tool.')
-                else:
-                    raise UserError(f'Tool name conflicts with previously renamed tool: {new_name!r}.')
+                new_name = tool_def.name
+                if new_name in tools:
+                    if new_name != original_name:
+                        raise UserError(f'Renaming tool {original_name!r} to {new_name!r} conflicts with existing tool.')
+                    else:
+                        raise UserError(f'Tool name conflicts with previously renamed tool: {new_name!r}.')
 
-            tools[new_name] = self._tool_for(tool, tool_def, max_retries, original_name)
-        return tools
+                tools[new_name] = self._tool_for(tool, tool_def, max_retries, original_name)
+            return tools
+        finally:
+            self._get_tools_in_progress = False
 
     def tool_for_tool_def(
         self, tool_def: ToolDefinition, *, ctx: RunContext[AgentDepsT], original_name: str | None = None

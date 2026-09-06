@@ -2991,3 +2991,24 @@ def test_apply_walks_combined_and_wrapper_toolsets():
     combined.apply(visited.append)
     assert inner1 in visited
     assert inner2 in visited
+
+
+async def test_add_function_during_get_tools_raises_error():
+    """Registering a tool during get_tools() iteration raises UserError."""
+
+    def first() -> str:
+        return 'first'
+
+    def second() -> str:
+        return 'second'
+
+    toolset = FunctionToolset()
+
+    async def prepare(_ctx: RunContext[None], tool_def: ToolDefinition) -> ToolDefinition:
+        toolset.add_function(second)
+        return tool_def
+
+    toolset.add_function(first, prepare=prepare)
+
+    with pytest.raises(UserError, match=r'Cannot register new tools during get_tools\(\) iteration'):
+        await toolset.get_tools(build_run_context(None))
