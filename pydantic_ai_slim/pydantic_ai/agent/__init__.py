@@ -143,6 +143,12 @@ from .abstract import (
 from .spec import AgentSpec, get_capability_registry
 from .wrapper import WrapperAgent
 
+# Import for durability capability detection in override
+try:
+    from ..durable_exec._base import BaseDurabilityCapability
+except ImportError:
+    BaseDurabilityCapability = None  # type: ignore[assignment,misc]
+
 if TYPE_CHECKING:
     from starlette.applications import Starlette
 
@@ -2031,6 +2037,20 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
         # override. Build it before resolving an overridden model so custom model IDs can
         # be preserved for that capability's async, deps-aware resolver.
         if resolved is not None and resolved.capability is not None:
+            # Check if we would drop a durability capability, which would silently degrade
+            # a durable run to a plain one. Durability capabilities are non-spec-serializable
+            # by design, so this is a structural error that requires rejection.
+            if BaseDurabilityCapability is not None:
+                durable_cap = BaseDurabilityCapability.from_agent(self)
+                if durable_cap is not None and durable_cap.in_durable_context():
+                    raise exceptions.UserError(
+                        f'Cannot use override(spec=...) with capabilities inside a {durable_cap.durable_container_noun}. '
+                        f'Spec capabilities replace the agent\'s root capability chain, which would delete the attached '
+                        f'{durable_cap.engine_name} durability capability and turn a durable run into a plain one. '
+                        f'To override configuration inside a {durable_cap.durable_container_noun}, use individual '
+                        f'override parameters (model=, instructions=, etc.) instead of spec=.'
+                    )
+
             override_caps = list(resolved.capability.capabilities)
             _inject_auto_capabilities(override_caps)
             override_capability: CombinedCapability[AgentDepsT] | None = CombinedCapability(override_caps).for_agent(
