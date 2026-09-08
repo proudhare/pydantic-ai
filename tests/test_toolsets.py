@@ -2991,3 +2991,30 @@ def test_apply_walks_combined_and_wrapper_toolsets():
     combined.apply(visited.append)
     assert inner1 in visited
     assert inner2 in visited
+
+
+async def test_function_toolset_rejects_add_during_get_tools():
+    """FunctionToolset raises UserError when add_function is called during get_tools execution."""
+    from pydantic_ai.tools import ToolDefinition
+
+    def first() -> str:
+        return 'first'
+
+    def second() -> str:
+        return 'second'
+
+    toolset = FunctionToolset()
+
+    async def prepare(_ctx: RunContext[None], tool_def: ToolDefinition) -> ToolDefinition:
+        toolset.add_function(second)
+        return tool_def
+
+    toolset.add_function(first, prepare=prepare)
+
+    with pytest.raises(
+        UserError,
+        match=r'Cannot add tools during get_tools\(\) execution\. '
+        r'Tool registration from prepare callbacks is not supported\. '
+        r'Use DynamicToolset, prepare_tools, or DeferredLoadingToolset for dynamic tool registration\.',
+    ):
+        await Agent(TestModel(), toolsets=[toolset]).run('go')
