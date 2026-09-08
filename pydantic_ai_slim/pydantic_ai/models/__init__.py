@@ -460,6 +460,20 @@ class Model(AbstractModel, Generic[InterfaceClient]):
         if self.provider is not None:
             await self.provider.__aexit__(exc_type, exc_val, exc_tb)
 
+    def __eq__(self, other: object) -> bool:
+        """Compare models by identity.
+
+        Models are facades over live providers and clients, so two model instances
+        compare equal only if they are the same object. This ensures that models with
+        different default settings are not considered equal, which would otherwise
+        cause silent data loss during capability merging.
+        """
+        return self is other
+
+    def __hash__(self) -> int:
+        """Hash models by identity."""
+        return id(self)
+
     @property
     def settings(self) -> ModelSettings | None:
         """Get the model settings."""

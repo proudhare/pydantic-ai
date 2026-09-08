@@ -32,6 +32,19 @@ class EmbeddingModel(ABC):
         """
         self._settings = settings
 
+    def __eq__(self, other: object) -> bool:
+        """Compare models by identity.
+
+        Embedding models are facades over live providers and clients, so two model
+        instances compare equal only if they are the same object. This ensures that
+        models with different default settings are not considered equal.
+        """
+        return self is other
+
+    def __hash__(self) -> int:
+        """Hash models by identity."""
+        return id(self)
+
     @property
     def settings(self) -> EmbeddingSettings | None:
         """Get the default settings for this model."""

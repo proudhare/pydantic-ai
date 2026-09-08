@@ -1399,3 +1399,60 @@ def test_a_deferred_mcp_capability_still_demands_an_id_of_its_own() -> None:
     # An explicit `id=` is all it ever needed, and the URL is then nowhere near the prompt.
     deferred = MCP[Any](url='https://mcp.example.com/s/sk-live-secret', defer_loading=True, id='docs')
     assert deferred.id == 'docs'
+
+
+def test_models_with_different_settings_are_not_equal() -> None:
+    """Models with different default settings compare by identity, not by settings-free equality.
+
+    Before this fix, two models with the same provider and name but different settings compared
+    equal, causing `merge_field_values` to drop the later model's settings during capability
+    merging.
+    """
+    from pydantic_ai.models.test import TestModel
+
+    first = TestModel(custom_result_text='a', settings={'temperature': 0.0})
+    later = TestModel(custom_result_text='a', settings={'temperature': 1.0})
+    
+    # Models now compare by identity, not by field equality
+    assert first != later
+    assert first == first
+    assert later == later
+
+
+def test_xsearch_merge_preserves_later_fallback_model_settings() -> None:
+    """When merging XSearch capabilities with different model settings, the later model survives.
+
+    This regression test ensures that models with different settings are not considered equal,
+    preventing silent data loss during capability merging.
+    """
+    from pydantic_ai.models.test import TestModel
+
+    first_model = TestModel(custom_result_text='a', settings={'temperature': 0.0})
+    later_model = TestModel(custom_result_text='a', settings={'temperature': 1.0})
+    
+    merged = XSearch.combine(
+        [
+            XSearch(native=False, fallback_subagent_model=first_model),
+            XSearch(native=False, fallback_subagent_model=later_model),
+        ]
+    )
+    
+    assert isinstance(merged, XSearch)
+    assert merged.fallback_subagent_model is later_model, 'the later model with its settings'
+    assert merged.fallback_subagent_model is not first_model
+
+
+def test_embedding_models_with_different_settings_are_not_equal() -> None:
+    """Embedding models with different default settings compare by identity.
+
+    Ensures that the same fix applies to `EmbeddingModel` as to `Model`.
+    """
+    from pydantic_ai.embeddings.test import TestEmbedding
+
+    first = TestEmbedding(dimensions=512, settings={'key': 'first'})
+    later = TestEmbedding(dimensions=512, settings={'key': 'later'})
+    
+    # Embedding models compare by identity, not by field equality
+    assert first != later
+    assert first == first
+    assert later == later
